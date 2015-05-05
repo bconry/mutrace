@@ -155,6 +155,7 @@ static unsigned show_n_read_contended_min = 0;
 static unsigned show_n_owner_changed_min = 2;
 static unsigned show_n_max = 10;
 
+static bool full_backtrace = false;
 static bool raise_trap = false;
 static bool track_rt = false;
 
@@ -513,6 +514,11 @@ static void setup(void) {
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_MAX.\n");
         else
                 show_n_max = t;
+
+
+        s = getenv("MUTRACE_FULL_BACKTRACE");
+        if (s != NULL && strncmp(s, "true", 4) == 0)
+            full_backtrace = true;
 
         s = getenv("MUTRACE_SUMMARY_MUTEX_ORDER");
         if (s != NULL) {
@@ -878,9 +884,9 @@ static bool mutex_info_stat(struct mutex_info *mi) {
                 mi->n_locked[WRITE],
                 mi->n_owner_changed,
                 mi->n_contended[WRITE],
-                (double) mi->nsec_contended_total[WRITE] / 1000000.0,
                 (double) mi->nsec_locked_total[WRITE] / 1000000.0,
-                (double) mi->nsec_locked_total[WRITE] / mi->n_locked[WRITE] / 1000000.0,
+                (double) mi->nsec_contended_total[WRITE] / 1000000.0,
+                (double) mi->nsec_contended_total[WRITE] / mi->n_locked[WRITE] / 1000000.0,
                 mi->mutex ? 'M' : 'W',
                 mi->broken ? '!' : (mi->dead ? 'x' : '-'),
                 track_rt ? (mi->realtime ? 'R' : '-') : '.',
@@ -895,9 +901,9 @@ static bool mutex_info_stat(struct mutex_info *mi) {
                         "         %8u          %8u %13.3f %12.3f %12.3f       \n",
                         mi->n_locked[READ],
                         mi->n_contended[READ],
-                        (double) mi->nsec_contended_total[READ] / 1000000.0,
                         (double) mi->nsec_locked_total[READ] / 1000000.0,
-                        (double) mi->nsec_locked_total[READ] / mi->n_locked[READ] / 1000000.0);
+                        (double) mi->nsec_contended_total[READ] / 1000000.0,
+                        (double) mi->nsec_contended_total[READ] / mi->n_locked[READ] / 1000000.0);
         }
 
         return true;
@@ -1006,7 +1012,7 @@ static void show_summary_internal(void) {
                         "\n"
                         "mutrace: Showing %u mutexes in order of %s:\n"
                         "\n"
-                        " Mutex #   Locked  Changed    Cont. cont.Time[ms] tot.Time[ms] avg.Time[ms] Flags\n",
+                        " Mutex #   Locked  Changed    Cont. tot.Time[ms] cont.Time[ms] avg.Time[ms] Flags\n",
                         m, summary_mutex_order_details[summary_mutex_order].ui_string);
 
                 for (i = n, m = 0; i > 0 && (show_n_max <= 0 || m < show_n_max); i--)
@@ -1254,32 +1260,39 @@ static bool verify_frame(const char *s) {
 
 static int light_backtrace(void **buffer, int size) {
 #if defined(__i386__) || defined(__x86_64__)
+
         int osize = 0;
         void *stackaddr;
         size_t stacksize;
         void *frame;
-
         pthread_attr_t attr;
-        pthread_getattr_np(pthread_self(), &attr);
-        pthread_attr_getstack(&attr, &stackaddr, &stacksize);
-        pthread_attr_destroy(&attr);
+
+        /* Prevent race condition on CentOS 6
+         * between libunwind [called by backtrace] and dlopen?
+         * Make sure mutrace wasfully initialized before calling backtrace
+         * Contingency: call light_trace
+         */
+        if (!full_backtrace || !initialized || !threads_existing){
+            pthread_getattr_np(pthread_self(), &attr);
+            pthread_attr_getstack(&attr, &stackaddr, &stacksize);
+            pthread_attr_destroy(&attr);
 
 #if defined(__i386__)
-        __asm__("mov %%ebp, %[frame]": [frame] "=r" (frame));
+            __asm__("mov %%ebp, %[frame]": [frame] "=r" (frame));
 #elif defined(__x86_64__)
-        __asm__("mov %%rbp, %[frame]": [frame] "=r" (frame));
+            __asm__("mov %%rbp, %[frame]": [frame] "=r" (frame));
 #endif
-        while (osize < size &&
-               frame >= stackaddr &&
-               frame < (void *)((char *)stackaddr + stacksize)) {
-                buffer[osize++] = *((void **)frame + 1);
-                frame = *(void **)frame;
-        }
+            while (osize < size &&
+                   frame >= stackaddr &&
+                   frame < (void *)((char *)stackaddr + stacksize)) {
+                    buffer[osize++] = *((void **)frame + 1);
+                    frame = *(void **)frame;
+            }
 
-        return osize;
-#else
-        return real_backtrace(buffer, size);
+            return osize;
+        }
 #endif
+        return real_backtrace(buffer, size);
 }
 
 static struct stacktrace_info generate_stacktrace(void) {

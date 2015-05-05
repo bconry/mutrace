@@ -52,3 +52,15 @@ AUTHORS:
 
 REQUIREMENTS:
         Recent gcc, glibc, Linux
+
+KNOWN ISSUES:
+        Older version of libunwind has a race condition with glibc's dlsym,
+        which may result in dead locks while calling "backtrace". Light
+        backtraces specific to mutrace are not affected. Full backtrace are
+        guarded against the race condition by using light traces until
+        mutrace has been fully initialized.
+
+        On Ubuntu 14.04, libiberty package has been modified. Install package
+        libiberty-dev instead of binutils-dev. Also note libiberty includes have
+        moved from /usr/include to /usr/include/libiberty. You may need to change
+        the include directive in backtrace-symbols.c and /usr/include/bfd.h

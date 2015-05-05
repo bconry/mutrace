@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with mutrace. If not, see <http://www.gnu.org/licenses/>.
 
-if ! TEMP=`getopt -o +ardh --long hash-size:,frames:,locked-min:,owner-changed-min:,contended-min:,max:,mutex-order:,cond-order:,trap,help,all,debug-info -n mutrace -- "$@"` ; then
+if ! TEMP=`getopt -o +ardh --long hash-size:,frames:,locked-min:,owner-changed-min:,contended-min:,max:,mutex-order:,cond-order:,trap,help,all,full-bt,debug-info -n mutrace -- "$@"` ; then
     exit 1
 fi
 
@@ -90,6 +90,12 @@ while : ; do
                         shift 1
                         ;;
 
+		--full-bt)
+		echo "full bt!!"
+			export MUTRACE_FULL_BACKTRACE="true"
+			shift 1
+			;;
+
                 -h|--help)
                         cat <<EOF
 @PACKAGE_STRING@
@@ -120,7 +126,8 @@ OPTIONS:
                                   at least this often
       --all                       Show all mutexes, overrides the values of the
                                   three values above
-
+      --full-bt		              Show full backtraces. Default is light
+				                  backtraces, when available
   -r, --track-rt                  Track for each mutex if it was accessed from
                                   a realtime thread
       --trap                      Trigger a debugger trap each time a mutex
@@ -201,13 +208,13 @@ if [ x"$1" = x ] ; then
 fi
 
 if [ x"$LD_PRELOAD" = x ] ; then
-        export LD_PRELOAD="libmutrace.so"
+        export LD_PRELOAD="/usr/local/lib/libmutrace.so"
 else
-        export LD_PRELOAD="$LD_PRELOAD:libmutrace.so"
+        export LD_PRELOAD="$LD_PRELOAD:/usr/local/lib/libmutrace.so"
 fi
 
 if [ x"$debug_info" = x1 ] ; then
-        export LD_PRELOAD="$LD_PRELOAD:libmutrace-backtrace-symbols.so"
+        export LD_PRELOAD="$LD_PRELOAD:/usr/local/lib/libmutrace-backtrace-symbols.so"
 fi
 
 exec "$@"
