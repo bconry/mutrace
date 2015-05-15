@@ -91,7 +91,6 @@ while : ; do
                         ;;
 
 		--full-bt)
-		echo "full bt!!"
 			export MUTRACE_FULL_BACKTRACE="true"
 			shift 1
 			;;
@@ -126,8 +125,8 @@ OPTIONS:
                                   at least this often
       --all                       Show all mutexes, overrides the values of the
                                   three values above
-      --full-bt		              Show full backtraces. Default is light
-				                  backtraces, when available
+      --full-bt		          Show full backtraces. Default is light
+                                  backtraces, when availables
   -r, --track-rt                  Track for each mutex if it was accessed from
                                   a realtime thread
       --trap                      Trigger a debugger trap each time a mutex
