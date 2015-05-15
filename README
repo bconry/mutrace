@@ -1,5 +1,6 @@
 MUTRACE Mutex Tracer
 
+This is a personal fork of Lennart Poeterring's work
 GIT:
         git://git.0pointer.de/mutrace.git
 
@@ -54,11 +55,13 @@ REQUIREMENTS:
         Recent gcc, glibc, Linux
 
 KNOWN ISSUES:
-        On Ubuntu 14.04, libiberty package has been modified. Install package
-        libiberty-dev instead of binutils-dev. Also note libiberty includes have
-        moved from /usr/include to /usr/include/libiberty. You may need to change
-        the include directive in backtrace-symbols.c and /usr/include/bfd.h
+        On Ubuntu 14.04, libiberty package has been modified.
+	Install package libiberty-dev instead of binutils-dev.
+	Also note libiberty includes have moved from
+	/usr/include to /usr/include/libiberty. You may need to
+	change the include directive in backtrace-symbols.c and
+	/usr/include/bfd.h.
 
-	When using --full-bt options, you may need to send USR1 signal to mutrace
-	instead of simply exiting the process, as the full debug info may not be
-	available any longer.
+	When using --full-bt options, you may need to send USR1
+	signal to mutrace instead of simply exiting the process,
+	as the full debug info may not be available any longer.
