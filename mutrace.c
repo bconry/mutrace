@@ -172,6 +172,7 @@ static int (*real_pthread_cond_broadcast)(pthread_cond_t *cond) = NULL;
 static int (*real_pthread_cond_wait)(pthread_cond_t *cond, pthread_mutex_t *mutex) = NULL;
 static int (*real_pthread_cond_timedwait)(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) = NULL;
 static int (*real_pthread_create)(pthread_t *newthread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg) = NULL;
+static void (*real_pthread_exit)(void *retval) __attribute__((noreturn)) = NULL;
 static int (*real_pthread_rwlock_init)(pthread_rwlock_t *rwlock, const pthread_rwlockattr_t *attr) = NULL;
 static int (*real_pthread_rwlock_destroy)(pthread_rwlock_t *rwlock) = NULL;
 static int (*real_pthread_rwlock_rdlock)(pthread_rwlock_t *rwlock) = NULL;
@@ -389,6 +390,7 @@ static void load_functions(void) {
         LOAD_FUNC(pthread_mutex_timedlock);
         LOAD_FUNC(pthread_mutex_unlock);
         LOAD_FUNC(pthread_create);
+	LOAD_FUNC(pthread_exit);
         LOAD_FUNC(pthread_rwlock_init);
         LOAD_FUNC(pthread_rwlock_destroy);
         LOAD_FUNC(pthread_rwlock_rdlock);
@@ -1267,12 +1269,7 @@ static int light_backtrace(void **buffer, int size) {
         void *frame;
         pthread_attr_t attr;
 
-        /* Prevent race condition on CentOS 6
-         * between libunwind [called by backtrace] and dlopen?
-         * Make sure mutrace wasfully initialized before calling backtrace
-         * Contingency: call light_trace
-         */
-        if (!full_backtrace || !initialized || !threads_existing){
+        if (!full_backtrace){
             pthread_getattr_np(pthread_self(), &attr);
             pthread_attr_getstack(&attr, &stackaddr, &stacksize);
             pthread_attr_destroy(&attr);
@@ -1981,6 +1978,17 @@ int pthread_create(pthread_t *newthread,
         }
 
         return real_pthread_create(newthread, attr, start_routine, arg);
+}
+
+void pthread_exit(void *retval) {
+	/* Prevent deadlock:
+	 * pthread_exit may call libunwind, which uses a mutex. Mutrace data gathering
+	 * will result in a second call to libunwind e.g. through "backtrace", resulting
+	 * in a deadlock. (observed on CentOS 6.5)
+	 *
+	 * As "recursive is thread_local, only need to disable mutrace hile exiting a thread */
+	recursive = true;
+	real_pthread_exit(retval);
 }
 
 int backtrace(void **array, int size) {
