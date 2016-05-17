@@ -1,10 +1,10 @@
 MUTRACE Mutex Tracer
 
 GIT:
-        git://git.0pointer.de/mutrace.git
+        https://github.com/bconry/mutrace.git
 
 GITWEB:
-        http://git.0pointer.de/?p=mutrace.git
+        https://github.com/bconry/mutrace
 
 USAGE:
         LD_PRELOAD=/usr/local/lib/libmutrace.so <your program>
