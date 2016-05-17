@@ -51,7 +51,16 @@ LICENSE:
         switch on such software.
 
 AUTHORS:
+        Carlo Marcelo Arenas Belon
+        David Bennett
+        Eric Bollengier
+        Brian Conry
+        Łukasz Czerwiński
+        Dana M. Diederich
+        Lénaïc Huard
         Lennart Poettering
+        Michel Alexandre Salim
+        Philip Withnall
 
 REQUIREMENTS:
         Recent gcc, glibc, Linux
