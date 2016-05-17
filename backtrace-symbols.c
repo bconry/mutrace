@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <execinfo.h>
+#include "config.h"
 #include <bfd.h>
 #include <libiberty.h>
 #include <dlfcn.h>
