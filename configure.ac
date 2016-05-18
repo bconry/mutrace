@@ -53,7 +53,7 @@ AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_CXX
 
 # GCC flags
-CC_CHECK_CFLAGS_APPEND([-Wall -W -Wextra -pipe -Wno-long-long -Winline -Wvla -Wno-overlength-strings -Wunsafe-loop-optimizations -Wundef -Wformat=2 -Wlogical-op -Wsign-compare -Wformat-security -Wmissing-include-dirs -Wformat-nonliteral -Wold-style-definition -Wpointer-arith -Winit-self -Wdeclaration-after-statement -Wfloat-equal -Wmissing-prototypes -Wstrict-prototypes -Wredundant-decls -Wmissing-declarations -Wmissing-noreturn -Wshadow -Wendif-labels -Wcast-align -Wwrite-strings -Wno-unused-parameter -Wno-strict-aliasing -ffast-math -Wp,-D_FORTIFY_SOURCE=2 -fno-common -fdiagnostics-show-option])
+CC_CHECK_CFLAGS_APPEND([-Wall -W -Wextra -pipe -Wno-long-long -Winline -Wvla -Wno-overlength-strings -Wunsafe-loop-optimizations -Wundef -Wformat=2 -Wlogical-op -Wsign-compare -Wformat-security -Wmissing-include-dirs -Wformat-nonliteral -Wold-style-definition -Wpointer-arith -Winit-self -Wdeclaration-after-statement -Wfloat-equal -Wmissing-prototypes -Wstrict-prototypes -Wredundant-decls -Wmissing-declarations -Wmissing-noreturn -Wshadow -Wendif-labels -Wcast-align -Wwrite-strings -Wno-unused-parameter -Wno-strict-aliasing -ffast-math -Wp,-D_FORTIFY_SOURCE=2 -fno-common -fdiagnostics-show-option -fno-omit-frame-pointer])
 
 #### libtool stuff ####
 
@@ -73,7 +73,7 @@ AC_CHECK_HEADERS([sys/ioctl.h])
 AC_CHECK_HEADERS([byteswap.h])
 
 AC_SEARCH_LIBS([bfd_init], [bfd], [], [AC_MSG_ERROR([*** libbfd not found])])
-AC_CHECK_HEADERS([bfd.h], [], [AC_MSG_ERROR([*** POSIX caps headers not found])])
+AC_CHECK_HEADERS([bfd.h], [], [AC_MSG_ERROR([*** libbfd headers not found])])
 
 #### Typdefs, structures, etc. ####
 

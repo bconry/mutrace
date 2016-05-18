@@ -79,11 +79,15 @@ struct thread_info {
         struct thread_info *next;
 };
 
+struct stacktrace_info {
+        void **frames;
+        int nb_frame;
+};
+
 struct mutex_info {
         pthread_mutex_t *mutex;
         pthread_rwlock_t *rwlock;
         isc_rwlock_t *rwl;
-        char *stacktrace;
 
         int type, protocol, kind;
         bool broken:1;
@@ -107,6 +111,8 @@ struct mutex_info {
         uint64_t nsec_blocked_max;
 
         unsigned id;
+
+        struct stacktrace_info stacktrace;
 
         struct mutex_info *next;
 
@@ -180,6 +186,8 @@ static uint64_t nsec_timestamp_setup;
 
 static void setup(void) __attribute ((constructor));
 static void shutdown(void) __attribute ((destructor));
+
+static char *stacktrace_to_string(struct stacktrace_info stacktrace);
 
 static pid_t _gettid(void) {
         return (pid_t) syscall(SYS_gettid);
@@ -556,15 +564,19 @@ static bool mutex_info_show(struct mutex_info *mi) {
 }
 
 static bool mutex_info_dump(struct mutex_info *mi) {
+        char *stacktrace_str;
         struct detailed_info *locked_from;
 
         if (!mutex_info_show(mi))
                 return false;
 
+        stacktrace_str = stacktrace_to_string(mi->stacktrace);
+
         fprintf(stderr,
                 "\nMutex #%u (0x%p) first referenced by:\n"
-                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, mi->stacktrace);
+                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, stacktrace_str);
 
+        free(stacktrace_str);
 
         locked_from = mi->details;
 
@@ -856,33 +868,66 @@ static bool verify_frame(const char *s) {
         return true;
 }
 
-static char* generate_stacktrace(void) {
-        void **buffer;
+static int light_backtrace(void **buffer, int size) {
+#if defined(__i386__) || defined(__x86_64__)
+        int osize = 0;
+        void *stackaddr;
+        size_t stacksize;
+        void *frame;
+
+        pthread_attr_t attr;
+        pthread_getattr_np(pthread_self(), &attr);
+        pthread_attr_getstack(&attr, &stackaddr, &stacksize);
+        pthread_attr_destroy(&attr);
+
+#if defined(__i386__)
+        __asm__("mov %%ebp, %[frame]": [frame] "=r" (frame));
+#elif defined(__x86_64__)
+        __asm__("mov %%rbp, %[frame]": [frame] "=r" (frame));
+#endif
+        while (osize < size &&
+               frame >= stackaddr &&
+               frame < (void *)((char *)stackaddr + stacksize)) {
+                buffer[osize++] = *((void **)frame + 1);
+                frame = *(void **)frame;
+        }
+
+        return osize;
+#else
+        return real_backtrace(buffer, size);
+#endif
+}
+
+static struct stacktrace_info generate_stacktrace(void) {
+        struct stacktrace_info stacktrace;
+
+        stacktrace.frames = malloc(sizeof(void*) * frames_max);
+        assert(stacktrace.frames);
+
+        stacktrace.nb_frame = light_backtrace(stacktrace.frames, frames_max);
+        assert(stacktrace.nb_frame >= 0);
+
+        return stacktrace;
+}
+
+static char *stacktrace_to_string(struct stacktrace_info stacktrace) {
         char **strings, *ret, *p;
-        int n, i;
+        int i;
         size_t k;
         bool b;
 
-        buffer = malloc(sizeof(void*) * frames_max);
-        assert(buffer);
-
-        n = real_backtrace(buffer, frames_max);
-        assert(n >= 0);
-
-        strings = real_backtrace_symbols(buffer, n);
+        strings = real_backtrace_symbols(stacktrace.frames, stacktrace.nb_frame);
         assert(strings);
 
-        free(buffer);
-
         k = 0;
-        for (i = 0; i < n; i++)
+        for (i = 0; i < stacktrace.nb_frame; i++)
                 k += strlen(strings[i]) + 2;
 
         ret = malloc(k + 1);
         assert(ret);
 
         b = false;
-        for (i = 0, p = ret; i < n; i++) {
+        for (i = 0, p = ret; i < stacktrace.nb_frame; i++) {
                 if (!b && !verify_frame(strings[i]))
                         continue;
 
