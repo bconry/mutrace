@@ -103,16 +103,25 @@ struct mutex_info {
         unsigned n_owner_changed;
         unsigned n_contended;
 
-        uint64_t nsec_timestamp;
-
         uint64_t nsec_locked_total;
         uint64_t nsec_locked_max;
-        uint64_t nsec_blocked_total;
-        uint64_t nsec_blocked_max;
+
+        uint64_t nsec_contended_total;
+        uint64_t nsec_contended_max;
+
+#define RW_CONTENTION_TRACKING 0
+#if RW_CONTENTION_TRACKING
+        /* TODO: integrate separate r/w contention tracking */
+        uint64_t nsec_read_contended_total; /* rwlocks only */
+        uint64_t nsec_read_contended_max; /* rwlocks only */
+        uint64_t nsec_write_contended_total; /* rwlocks only */
+        uint64_t nsec_write_contended_max; /* rwlocks only */
+#endif
+
+        uint64_t nsec_timestamp;
+        struct stacktrace_info stacktrace;
 
         unsigned id;
-
-        struct stacktrace_info stacktrace;
 
         struct mutex_info *next;
 
@@ -519,15 +528,37 @@ static int mutex_info_compare(const void *_a, const void *_b) {
         else if (a->n_contended < b->n_contended)
                 return 1;
 
-        if (a->nsec_blocked_max > b->nsec_blocked_max)
+        if (a->nsec_contended_max > b->nsec_contended_max)
                 return -1;
-        else if (a->nsec_blocked_max < b->nsec_blocked_max)
+        else if (a->nsec_contended_max < b->nsec_contended_max)
                 return 1;
 
-        if (a->nsec_blocked_total > b->nsec_blocked_total)
+        if (a->nsec_contended_total > b->nsec_contended_total)
                 return -1;
-        else if (a->nsec_blocked_total < b->nsec_blocked_total)
+        else if (a->nsec_contended_total < b->nsec_contended_total)
                 return 1;
+
+#if RW_CONTENTION_TRACKING
+        if (a->nsec_read_contended_max > b->nsec_read_contended_max)
+                return -1;
+        else if (a->nsec_read_contended_max < b->nsec_read_contended_max)
+                return 1;
+
+        if (a->nsec_read_contended_total > b->nsec_read_contended_total)
+                return -1;
+        else if (a->nsec_read_contended_total < b->nsec_read_contended_total)
+                return 1;
+
+        if (a->nsec_write_contended_max > b->nsec_write_contended_max)
+                return -1;
+        else if (a->nsec_write_contended_max < b->nsec_write_contended_max)
+                return 1;
+
+        if (a->nsec_write_contended_total > b->nsec_write_contended_total)
+                return -1;
+        else if (a->nsec_write_contended_total < b->nsec_write_contended_total)
+                return 1;
+#endif
 
         if (a->n_owner_changed > b->n_owner_changed)
                 return -1;
@@ -674,9 +705,9 @@ static bool mutex_info_stat(struct mutex_info *mi) {
                 (double) mi->nsec_locked_total / 1000000.0,
                 (double) mi->nsec_locked_total / mi->n_locked / 1000000.0,
                 (double) mi->nsec_locked_max / 1000000.0,
-                (double) mi->nsec_blocked_total / 1000000.0,
-                (double) mi->nsec_blocked_total / mi->n_locked / 1000000.0,
-                (double) mi->nsec_blocked_max / 1000000.0,
+                (double) mi->nsec_contended_total / 1000000.0,
+                (double) mi->nsec_contended_total / mi->n_locked / 1000000.0,
+                (double) mi->nsec_contended_max / 1000000.0,
                 mi->mutex ? 'M' : mi->rwlock ? 'W' : 'I',
                 mi->broken ? '!' : (mi->dead ? 'x' : '-'),
                 track_rt ? (mi->realtime ? 'R' : '-') : '.',
@@ -745,7 +776,7 @@ static void show_summary_internal(void) {
                         "\n"
                         "mutrace: Showing %u most contended mutexes:\n"
                         "\n"
-                        " Mutex #   Locked  Changed    Cont. tot.Time[ms] avg.Time[ms] max.Time[ms] tot.Blkd[ms] avg.Blkd[ms] max.Blkd[ms]  Flags\n",
+                        " Mutex #   Locked  Changed    Cont. tot.Time[ms] avg.Time[ms] max.Time[ms] tot.Cont[ms] avg.Cont[ms] max.Cont[ms]  Flags\n",
                         m);
 
                 for (i = 0, m = 0; i < n && (show_n_max <= 0 || m < show_n_max); i++)
@@ -1146,7 +1177,7 @@ static void update_blocking_counts(struct mutex_info *mi, const char *blockee_st
         blockee_callpoint->n_blockee++;
 }
 
-static void generic_lock(struct mutex_info *mi, bool busy, uint64_t nsec_blocked, bool do_details) {
+static void generic_lock(struct mutex_info *mi, bool busy, uint64_t nsec_contended, bool do_details) {
         struct thread_info *this_ti;
         pid_t tid;
 
@@ -1166,10 +1197,10 @@ static void generic_lock(struct mutex_info *mi, bool busy, uint64_t nsec_blocked
         if (busy) {
                 mi->n_contended++;
 
-                mi->nsec_blocked_total += nsec_blocked;
+                mi->nsec_contended_total += nsec_contended;
 
-                if (nsec_blocked > mi->nsec_blocked_max)
-                        mi->nsec_blocked_max = nsec_blocked;
+                if (nsec_contended > mi->nsec_contended_max)
+                        mi->nsec_contended_max = nsec_contended;
 
                 if (mi->detailed_tracking) {
                         update_blocking_counts(mi, this_ti->stacktrace);
@@ -1214,7 +1245,7 @@ static void generic_lock(struct mutex_info *mi, bool busy, uint64_t nsec_blocked
                 mi->realtime = true;
 }
 
-static void mutex_lock(pthread_mutex_t *mutex, bool busy, uint64_t nsec_blocked) {
+static void mutex_lock(pthread_mutex_t *mutex, bool busy, uint64_t nsec_contended) {
         struct mutex_info *mi;
 
         if (UNLIKELY(!initialized || recursive))
@@ -1231,7 +1262,7 @@ static void mutex_lock(pthread_mutex_t *mutex, bool busy, uint64_t nsec_blocked)
                         DEBUG_TRAP;
         }
 
-        generic_lock(mi, busy, nsec_blocked, detail_contentious_mutexes);
+        generic_lock(mi, busy, nsec_contended, detail_contentious_mutexes);
 
         mutex_info_release(mutex);
         recursive = false;
@@ -1240,7 +1271,7 @@ static void mutex_lock(pthread_mutex_t *mutex, bool busy, uint64_t nsec_blocked)
 int pthread_mutex_lock(pthread_mutex_t *mutex) {
         int r;
         bool busy;
-        uint64_t nsec_blocked = 0;
+        uint64_t wait_time = 0;
 
         if (UNLIKELY(!initialized && recursive)) {
                 /* During the initialization phase we might be called
@@ -1261,24 +1292,24 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
                 return r;
 
         if (UNLIKELY((busy = (r == EBUSY)))) {
-                uint64_t nsec_ts = nsec_now();
+                uint64_t start_time = nsec_now();
 
                 r = real_pthread_mutex_lock(mutex);
 
-                nsec_blocked = nsec_now() - nsec_ts;
+                wait_time = nsec_now() - start_time;
 
                 if (UNLIKELY(r != 0))
                         return r;
         }
 
-        mutex_lock(mutex, busy, nsec_blocked);
+        mutex_lock(mutex, busy, wait_time);
         return r;
 }
 
 int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *abstime) {
         int r;
         bool busy;
-        uint64_t nsec_blocked = 0;
+        uint64_t wait_time = 0;
 
         if (UNLIKELY(!initialized && recursive)) {
                 assert(!threads_existing);
@@ -1292,11 +1323,11 @@ int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *absti
                 return r;
 
         if (UNLIKELY((busy = (r == EBUSY)))) {
-                uint64_t nsec_ts = nsec_now();
+                uint64_t start_time = nsec_now();
 
                 r = real_pthread_mutex_timedlock(mutex, abstime);
 
-                nsec_blocked = nsec_now() - nsec_ts;
+                wait_time = nsec_now() - start_time;
 
                 if (UNLIKELY(r == ETIMEDOUT))
                         busy = true;
@@ -1304,7 +1335,7 @@ int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *absti
                         return r;
         }
 
-        mutex_lock(mutex, busy, nsec_blocked);
+        mutex_lock(mutex, busy, wait_time);
         return r;
 }
 
@@ -1611,7 +1642,7 @@ int pthread_rwlock_destroy(pthread_rwlock_t *rwlock) {
         return real_pthread_rwlock_destroy(rwlock);
 }
 
-static void rwlock_lock(pthread_rwlock_t *rwlock, bool for_write, bool busy, uint64_t nsec_blocked) {
+static void rwlock_lock(pthread_rwlock_t *rwlock, bool for_write, bool busy, uint64_t nsec_contended) {
         struct mutex_info *mi;
 
         if (UNLIKELY(!initialized || recursive))
@@ -1628,7 +1659,7 @@ static void rwlock_lock(pthread_rwlock_t *rwlock, bool for_write, bool busy, uin
                         DEBUG_TRAP;
         }
 
-        generic_lock(mi, busy, nsec_blocked, detail_contentious_rwlocks);
+        generic_lock(mi, busy, nsec_contended, detail_contentious_rwlocks);
 
         rwlock_info_release(rwlock);
         recursive = false;
@@ -1637,7 +1668,7 @@ static void rwlock_lock(pthread_rwlock_t *rwlock, bool for_write, bool busy, uin
 int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock) {
         int r;
         bool busy;
-        uint64_t nsec_blocked = 0;
+        uint64_t wait_time = 0;
 
         if (UNLIKELY(!initialized && recursive)) {
                 assert(!threads_existing);
@@ -1651,11 +1682,11 @@ int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock) {
                 return r;
 
         if (UNLIKELY((busy = (r == EBUSY)))) {
-                uint64_t nsec_ts = nsec_now();
+                uint64_t start_time = nsec_now();
 
                 r = real_pthread_rwlock_rdlock(rwlock);
 
-                nsec_blocked = nsec_now() - nsec_ts;
+                wait_time = nsec_now() - start_time;
 
                 if (UNLIKELY(r == ETIMEDOUT))
                         busy = true;
@@ -1663,7 +1694,7 @@ int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock) {
                         return r;
         }
 
-        rwlock_lock(rwlock, false, busy, nsec_blocked);
+        rwlock_lock(rwlock, false, busy, wait_time);
         return r;
 }
 
@@ -1688,7 +1719,7 @@ int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock) {
 int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock, const struct timespec *abstime) {
         int r;
         bool busy;
-        uint64_t nsec_blocked = 0;
+        uint64_t wait_time = 0;
 
         if (UNLIKELY(!initialized && recursive)) {
                 assert(!threads_existing);
@@ -1702,11 +1733,11 @@ int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock, const struct timespec *
                 return r;
 
         if (UNLIKELY((busy = (r == EBUSY)))) {
-                uint64_t nsec_ts = nsec_now();
+                uint64_t start_time = nsec_now();
 
                 r = real_pthread_rwlock_timedrdlock(rwlock, abstime);
 
-                nsec_blocked = nsec_now() - nsec_ts;
+                wait_time = nsec_now() - start_time;
 
                 if (UNLIKELY(r == ETIMEDOUT))
                         busy = true;
@@ -1714,14 +1745,14 @@ int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock, const struct timespec *
                         return r;
         }
 
-        rwlock_lock(rwlock, false, busy, nsec_blocked);
+        rwlock_lock(rwlock, false, busy, wait_time);
         return r;
 }
 
 int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock) {
         int r;
         bool busy;
-        uint64_t nsec_blocked = 0;
+        uint64_t wait_time = 0;
 
         if (UNLIKELY(!initialized && recursive)) {
                 assert(!threads_existing);
@@ -1735,11 +1766,11 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock) {
                 return r;
 
         if (UNLIKELY((busy = (r == EBUSY)))) {
-                uint64_t nsec_ts = nsec_now();
+                uint64_t start_time = nsec_now();
 
                 r = real_pthread_rwlock_wrlock(rwlock);
 
-                nsec_blocked = nsec_now() - nsec_ts;
+                wait_time = nsec_now() - start_time;
 
                 if (UNLIKELY(r == ETIMEDOUT))
                         busy = true;
@@ -1747,7 +1778,7 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock) {
                         return r;
         }
 
-        rwlock_lock(rwlock, true, busy, nsec_blocked);
+        rwlock_lock(rwlock, true, busy, wait_time);
         return r;
 }
 
@@ -1772,7 +1803,7 @@ int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock) {
 int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock, const struct timespec *abstime) {
         int r;
         bool busy;
-        uint64_t nsec_blocked = 0;
+        uint64_t wait_time = 0;
 
         if (UNLIKELY(!initialized && recursive)) {
                 assert(!threads_existing);
@@ -1786,11 +1817,11 @@ int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock, const struct timespec *
                 return r;
 
         if (UNLIKELY((busy = (r == EBUSY)))) {
-                uint64_t nsec_ts = nsec_now();
+                uint64_t start_time = nsec_now();
 
                 r = real_pthread_rwlock_timedwrlock(rwlock, abstime);
 
-                nsec_blocked = nsec_now() - nsec_ts;
+                wait_time = nsec_now() - start_time;
 
                 if (UNLIKELY(r == ETIMEDOUT))
                         busy = true;
@@ -1798,7 +1829,7 @@ int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock, const struct timespec *
                         return r;
         }
 
-        rwlock_lock(rwlock, true, busy, nsec_blocked);
+        rwlock_lock(rwlock, true, busy, wait_time);
         return r;
 }
 
