@@ -3,7 +3,7 @@
 /***
   This file is part of mutrace.
 
-  Copyright 2009 Lennart Poettering
+  Copyright 2009-2017 Lennart Poettering and others
 
   mutrace is free software: you can redistribute it and/or modify it
   under the terms of the GNU Lesser General Public License as
@@ -63,6 +63,8 @@
 #define LIKELY(x) (__builtin_expect(!!(x),1))
 #define UNLIKELY(x) (__builtin_expect(!!(x),0))
 
+#define FP_NS_PER_MS 1000000.0
+
 struct detailed_info {
         char *stacktrace;
 
@@ -106,17 +108,13 @@ struct mutex_info {
         uint64_t nsec_locked_total;
         uint64_t nsec_locked_max;
 
-        uint64_t nsec_contended_total;
-        uint64_t nsec_contended_max;
+        uint64_t nsec_contended_total; /* mutexes only */
+        uint64_t nsec_contended_max; /* mutexes only */
 
-#define RW_CONTENTION_TRACKING 0
-#if RW_CONTENTION_TRACKING
-        /* TODO: integrate separate r/w contention tracking */
         uint64_t nsec_read_contended_total; /* rwlocks only */
         uint64_t nsec_read_contended_max; /* rwlocks only */
         uint64_t nsec_write_contended_total; /* rwlocks only */
         uint64_t nsec_write_contended_max; /* rwlocks only */
-#endif
 
         uint64_t nsec_timestamp;
         struct stacktrace_info stacktrace;
@@ -528,6 +526,17 @@ static int mutex_info_compare(const void *_a, const void *_b) {
         else if (a->n_contended < b->n_contended)
                 return 1;
 
+        /*
+         * The next six items compared aren't really fair to compare
+         * between rw-ish mutexes and non-rw-ish mutexes, but I keep
+         * telling myself that it will only fall back to these
+         * if the mutexes in question were contended exactly the
+         * same number of times, which is probably(?) going to be
+         * somewhat rare.
+         * I also know that there's an upcoming merge that lets the
+         * user specify the sort order which will force a complete
+         * revisit of this logic anyway...
+         */
         if (a->nsec_contended_max > b->nsec_contended_max)
                 return -1;
         else if (a->nsec_contended_max < b->nsec_contended_max)
@@ -538,7 +547,6 @@ static int mutex_info_compare(const void *_a, const void *_b) {
         else if (a->nsec_contended_total < b->nsec_contended_total)
                 return 1;
 
-#if RW_CONTENTION_TRACKING
         if (a->nsec_read_contended_max > b->nsec_read_contended_max)
                 return -1;
         else if (a->nsec_read_contended_max < b->nsec_read_contended_max)
@@ -558,7 +566,6 @@ static int mutex_info_compare(const void *_a, const void *_b) {
                 return -1;
         else if (a->nsec_write_contended_total < b->nsec_write_contended_total)
                 return 1;
-#endif
 
         if (a->n_owner_changed > b->n_owner_changed)
                 return -1;
@@ -633,7 +640,6 @@ static bool mutex_info_dump(struct mutex_info *mi) {
                 locked_from = locked_from->next;
         }
 
-
         return true;
 }
 
@@ -691,29 +697,58 @@ static char rwlock_kind_name(int kind) {
         }
 }
 
+/* TODO: add options of other output formats, e.g. JSON */
 static bool mutex_info_stat(struct mutex_info *mi) {
 
         if (!mutex_info_show(mi))
                 return false;
 
         fprintf(stderr,
-                "%8u %8u %8u %8u %12.3f %12.3f %12.3f %12.3f %12.3f %12.3f %c%c%c%c%c%c\n",
+                "%8u %8u %8u %8u ",
                 mi->id,
                 mi->n_locked,
                 mi->n_owner_changed,
-                mi->n_contended,
-                (double) mi->nsec_locked_total / 1000000.0,
-                (double) mi->nsec_locked_total / mi->n_locked / 1000000.0,
-                (double) mi->nsec_locked_max / 1000000.0,
-                (double) mi->nsec_contended_total / 1000000.0,
-                (double) mi->nsec_contended_total / mi->n_locked / 1000000.0,
-                (double) mi->nsec_contended_max / 1000000.0,
+                mi->n_contended);
+
+        if (mi->rwlock || mi->rwl) { /* is rw-ish */
+                fprintf(stderr,
+                        "%12.3f %12.3f %12.3f                                        ",
+                        (double) mi->nsec_locked_total / FP_NS_PER_MS,
+                        (double) mi->nsec_locked_total / mi->n_locked / FP_NS_PER_MS,
+                        (double) mi->nsec_locked_max / FP_NS_PER_MS);
+        }
+        else { /* not rw-ish */
+                fprintf(stderr,
+                        "%12.3f %12.3f %12.3f %12.3f %12.3f %12.3f ",
+                        (double) mi->nsec_locked_total / FP_NS_PER_MS,
+                        (double) mi->nsec_locked_total / mi->n_locked / FP_NS_PER_MS,
+                        (double) mi->nsec_locked_max / FP_NS_PER_MS,
+                        (double) mi->nsec_contended_total / FP_NS_PER_MS,
+                        (double) mi->nsec_contended_total / mi->n_locked / FP_NS_PER_MS,
+                        (double) mi->nsec_contended_max / FP_NS_PER_MS);
+        }
+
+        fprintf(stderr,
+                "%c%c%c%c%c%c\n",
                 mi->mutex ? 'M' : mi->rwlock ? 'W' : 'I',
                 mi->broken ? '!' : (mi->dead ? 'x' : '-'),
                 track_rt ? (mi->realtime ? 'R' : '-') : '.',
                 mi->mutex ? mutex_type_name(mi->type) : '.',
                 mi->mutex ? mutex_protocol_name(mi->protocol) : '.',
                 mi->rwlock ? rwlock_kind_name(mi->kind) : '.');
+
+        if (mi->rwlock || mi->rwl) { /* is rw-ish */
+                fprintf(stderr,
+                        "                                                                        RD %12.3f %12.3f %12.3f ||||||\n",
+                        (double) mi->nsec_read_contended_total / FP_NS_PER_MS,
+                        (double) mi->nsec_read_contended_total / mi->n_locked / FP_NS_PER_MS,
+                        (double) mi->nsec_read_contended_max / FP_NS_PER_MS);
+                fprintf(stderr,
+                        "                                                                        WR %12.3f %12.3f %12.3f ||||||\n",
+                        (double) mi->nsec_write_contended_total / FP_NS_PER_MS,
+                        (double) mi->nsec_write_contended_total / mi->n_locked / FP_NS_PER_MS,
+                        (double) mi->nsec_write_contended_max / FP_NS_PER_MS);
+        }
 
         return true;
 }
@@ -816,7 +851,7 @@ static void show_summary_internal(void) {
 
         fprintf(stderr,
                 "\n"
-                "mutrace: Total runtime is %0.3f ms.\n", (double) t / 1000000.0);
+                "mutrace: Total runtime is %0.3f ms.\n", (double) t / FP_NS_PER_MS);
 
         n_cpus = sysconf(_SC_NPROCESSORS_ONLN);
         assert(n_cpus >= 1);
@@ -962,6 +997,12 @@ static int light_backtrace(void **buffer, int size) {
 #endif
 }
 
+/*
+ * FIXME
+ * The conversion from string stacktraces to structure stacktraces is woefully
+ * incomplete, such that the code won't even compile.
+ * I have an unrelated change that I want to commit before tackling this.
+ */
 static struct stacktrace_info generate_stacktrace(void) {
         struct stacktrace_info stacktrace;
 
@@ -1177,7 +1218,7 @@ static void update_blocking_counts(struct mutex_info *mi, const char *blockee_st
         blockee_callpoint->n_blockee++;
 }
 
-static void generic_lock(struct mutex_info *mi, bool busy, uint64_t nsec_contended, bool do_details) {
+static void generic_lock(struct mutex_info *mi, bool busy, bool for_write, uint64_t nsec_contended, bool do_details) {
         struct thread_info *this_ti;
         pid_t tid;
 
@@ -1191,16 +1232,30 @@ static void generic_lock(struct mutex_info *mi, bool busy, uint64_t nsec_contend
         this_ti->owner = tid;
 
         if (mi->detailed_tracking) {
-            this_ti->stacktrace = generate_stacktrace();
+                this_ti->stacktrace = generate_stacktrace();
         }
 
         if (busy) {
                 mi->n_contended++;
 
-                mi->nsec_contended_total += nsec_contended;
+                if (mi->mutex) {
+                        mi->nsec_contended_total += nsec_contended;
 
-                if (nsec_contended > mi->nsec_contended_max)
-                        mi->nsec_contended_max = nsec_contended;
+                        if (nsec_contended > mi->nsec_contended_max)
+                                mi->nsec_contended_max = nsec_contended;
+                }
+                else if (for_write) {
+                        mi->nsec_write_contended_total += nsec_contended;
+
+                        if (nsec_contended > mi->nsec_write_contended_max)
+                                mi->nsec_write_contended_max = nsec_contended;
+                }
+                else {
+                        mi->nsec_read_contended_total += nsec_contended;
+
+                        if (nsec_contended > mi->nsec_read_contended_max)
+                                mi->nsec_read_contended_max = nsec_contended;
+                }
 
                 if (mi->detailed_tracking) {
                         update_blocking_counts(mi, this_ti->stacktrace);
@@ -1262,7 +1317,7 @@ static void mutex_lock(pthread_mutex_t *mutex, bool busy, uint64_t nsec_contende
                         DEBUG_TRAP;
         }
 
-        generic_lock(mi, busy, nsec_contended, detail_contentious_mutexes);
+        generic_lock(mi, busy, false, nsec_contended, detail_contentious_mutexes);
 
         mutex_info_release(mutex);
         recursive = false;
@@ -1659,7 +1714,7 @@ static void rwlock_lock(pthread_rwlock_t *rwlock, bool for_write, bool busy, uin
                         DEBUG_TRAP;
         }
 
-        generic_lock(mi, busy, nsec_contended, detail_contentious_rwlocks);
+        generic_lock(mi, busy, for_write, nsec_contended, detail_contentious_rwlocks);
 
         rwlock_info_release(rwlock);
         recursive = false;
@@ -2010,7 +2065,7 @@ static void irwlock_lock(isc_rwlock_t *rwl, bool for_write, bool busy, uint64_t 
                         DEBUG_TRAP;
         }
 
-        generic_lock(mi, busy, nsec_blocked, detail_contentious_isc_rwlocks);
+        generic_lock(mi, busy, for_write, nsec_blocked, detail_contentious_isc_rwlocks);
 
         isc_rwlock_info_release(rwl);
         recursive = false;
