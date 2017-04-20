@@ -96,6 +96,7 @@ struct mutex_info {
         bool realtime:1;
         bool dead:1;
         bool detailed_tracking:1;
+        bool is_rw:1;
 
         unsigned n_lock_level;
 
@@ -526,17 +527,6 @@ static int mutex_info_compare(const void *_a, const void *_b) {
         else if (a->n_contended < b->n_contended)
                 return 1;
 
-        /*
-         * The next six items compared aren't really fair to compare
-         * between rw-ish mutexes and non-rw-ish mutexes, but I keep
-         * telling myself that it will only fall back to these
-         * if the mutexes in question were contended exactly the
-         * same number of times, which is probably(?) going to be
-         * somewhat rare.
-         * I also know that there's an upcoming merge that lets the
-         * user specify the sort order which will force a complete
-         * revisit of this logic anyway...
-         */
         if (a->nsec_contended_max > b->nsec_contended_max)
                 return -1;
         else if (a->nsec_contended_max < b->nsec_contended_max)
@@ -704,32 +694,17 @@ static bool mutex_info_stat(struct mutex_info *mi) {
                 return false;
 
         fprintf(stderr,
-                "%8u %8u %8u %8u ",
+                "%8u %8u %8u %8u %12.3f %12.3f %12.3f %12.3f %12.3f %12.3f %c%c%c%c%c%c\n",
                 mi->id,
                 mi->n_locked,
                 mi->n_owner_changed,
-                mi->n_contended);
-
-        if (mi->rwlock || mi->rwl) { /* is rw-ish */
-                fprintf(stderr,
-                        "%12.3f %12.3f %12.3f                                        ",
-                        (double) mi->nsec_locked_total / FP_NS_PER_MS,
-                        (double) mi->nsec_locked_total / mi->n_locked / FP_NS_PER_MS,
-                        (double) mi->nsec_locked_max / FP_NS_PER_MS);
-        }
-        else { /* not rw-ish */
-                fprintf(stderr,
-                        "%12.3f %12.3f %12.3f %12.3f %12.3f %12.3f ",
-                        (double) mi->nsec_locked_total / FP_NS_PER_MS,
-                        (double) mi->nsec_locked_total / mi->n_locked / FP_NS_PER_MS,
-                        (double) mi->nsec_locked_max / FP_NS_PER_MS,
-                        (double) mi->nsec_contended_total / FP_NS_PER_MS,
-                        (double) mi->nsec_contended_total / mi->n_locked / FP_NS_PER_MS,
-                        (double) mi->nsec_contended_max / FP_NS_PER_MS);
-        }
-
-        fprintf(stderr,
-                "%c%c%c%c%c%c\n",
+                mi->n_contended,
+                (double) mi->nsec_locked_total / FP_NS_PER_MS,
+                (double) mi->nsec_locked_total / mi->n_locked / FP_NS_PER_MS,
+                (double) mi->nsec_locked_max / FP_NS_PER_MS,
+                (double) mi->nsec_contended_total / FP_NS_PER_MS,
+                (double) mi->nsec_contended_total / mi->n_locked / FP_NS_PER_MS,
+                (double) mi->nsec_contended_max / FP_NS_PER_MS,
                 mi->mutex ? 'M' : mi->rwlock ? 'W' : 'I',
                 mi->broken ? '!' : (mi->dead ? 'x' : '-'),
                 track_rt ? (mi->realtime ? 'R' : '-') : '.',
@@ -737,7 +712,7 @@ static bool mutex_info_stat(struct mutex_info *mi) {
                 mi->mutex ? mutex_protocol_name(mi->protocol) : '.',
                 mi->rwlock ? rwlock_kind_name(mi->kind) : '.');
 
-        if (mi->rwlock || mi->rwl) { /* is rw-ish */
+        if (mi->is_rw) {
                 fprintf(stderr,
                         "                                                                        RD %12.3f %12.3f %12.3f ||||||\n",
                         (double) mi->nsec_read_contended_total / FP_NS_PER_MS,
@@ -1073,6 +1048,7 @@ static struct mutex_info *mutex_info_add(unsigned long u, pthread_mutex_t *mutex
         mi->mutex = mutex;
         mi->type = type;
         mi->protocol = protocol;
+        mi->is_rw = false;
         mi->stacktrace = generate_stacktrace();
 
         mi->next = alive_mutexes[u];
@@ -1238,23 +1214,24 @@ static void generic_lock(struct mutex_info *mi, bool busy, bool for_write, uint6
         if (busy) {
                 mi->n_contended++;
 
-                if (mi->mutex) {
-                        mi->nsec_contended_total += nsec_contended;
+                mi->nsec_contended_total += nsec_contended;
 
-                        if (nsec_contended > mi->nsec_contended_max)
-                                mi->nsec_contended_max = nsec_contended;
-                }
-                else if (for_write) {
-                        mi->nsec_write_contended_total += nsec_contended;
+                if (nsec_contended > mi->nsec_contended_max)
+                        mi->nsec_contended_max = nsec_contended;
 
-                        if (nsec_contended > mi->nsec_write_contended_max)
-                                mi->nsec_write_contended_max = nsec_contended;
-                }
-                else {
-                        mi->nsec_read_contended_total += nsec_contended;
+                if (mi->is_rw) {
+                        if (for_write) {
+                                mi->nsec_write_contended_total += nsec_contended;
 
-                        if (nsec_contended > mi->nsec_read_contended_max)
-                                mi->nsec_read_contended_max = nsec_contended;
+                                if (nsec_contended > mi->nsec_write_contended_max)
+                                        mi->nsec_write_contended_max = nsec_contended;
+                        }
+                        else {
+                                mi->nsec_read_contended_total += nsec_contended;
+
+                                if (nsec_contended > mi->nsec_read_contended_max)
+                                        mi->nsec_read_contended_max = nsec_contended;
+                        }
                 }
 
                 if (mi->detailed_tracking) {
@@ -1317,7 +1294,7 @@ static void mutex_lock(pthread_mutex_t *mutex, bool busy, uint64_t nsec_contende
                         DEBUG_TRAP;
         }
 
-        generic_lock(mi, busy, false, nsec_contended, detail_contentious_mutexes);
+        generic_lock(mi, busy, true, nsec_contended, detail_contentious_mutexes);
 
         mutex_info_release(mutex);
         recursive = false;
@@ -1578,6 +1555,7 @@ static struct mutex_info *rwlock_info_add(unsigned long u, pthread_rwlock_t *rwl
 
         mi->rwlock = rwlock;
         mi->kind = kind;
+        mi->is_rw = true;
         mi->stacktrace = generate_stacktrace();
 
         mi->next = alive_mutexes[u];
@@ -1937,6 +1915,7 @@ static struct mutex_info *isc_rwlock_info_add(unsigned long u, isc_rwlock_t *rwl
         assert(mi);
 
         mi->rwl = rwl;
+        mi->is_rw = true;
         mi->stacktrace = generate_stacktrace();
 
         mi->next = alive_mutexes[u];
