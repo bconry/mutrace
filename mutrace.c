@@ -65,19 +65,19 @@
 
 #define FP_NS_PER_MS 1000000.0
 
-struct detailed_info {
+struct location_stats {
         char *stacktrace;
 
         unsigned n_blocker;
         unsigned n_blockee;
 
-        struct detailed_info *next;
+        struct location_stats *next;
 };
 
 struct thread_info {
         pid_t owner;
         char *stacktrace;
-        struct detailed_info *details;
+        struct location_stats *locked_from;
         struct thread_info *next;
 };
 
@@ -124,9 +124,9 @@ struct mutex_info {
 
         struct mutex_info *next;
 
-        struct detailed_info *details;
+        struct location_stats *locked_from;
 
-        struct thread_info *holder_details;
+        struct thread_info *holder_list;
 };
 
 static unsigned hash_size = 3371; /* probably a good idea to pick a prime here */
@@ -477,11 +477,11 @@ static void unlock_hash_mutex(unsigned u) {
         assert(r == 0);
 }
 
-static struct detailed_info *find_add_details(struct mutex_info *mi, const char *stacktrace) {
-        struct detailed_info *candidate, **pcandidate;
+static struct location_stats *find_locking_location(struct mutex_info *mi, const char *stacktrace) {
+        struct location_stats *candidate, **pcandidate;
 
-        pcandidate = &(mi->details);
-        candidate = mi->details;
+        pcandidate = &(mi->locked_from);
+        candidate = mi->locked_from;
 
         while (candidate) {
                 if (!strcmp(candidate->stacktrace, stacktrace))
@@ -491,7 +491,7 @@ static struct detailed_info *find_add_details(struct mutex_info *mi, const char 
                 candidate = candidate->next;
         }
 
-        *pcandidate = calloc(1, sizeof(struct detailed_info));
+        *pcandidate = calloc(1, sizeof(struct location_stats));
 
         assert(*pcandidate);
 
@@ -505,7 +505,7 @@ static struct detailed_info *find_add_details(struct mutex_info *mi, const char 
 static struct thread_info *find_thread(struct mutex_info *mi, pid_t cur_thread) {
         struct thread_info *candidate;
 
-        candidate = mi->holder_details;
+        candidate = mi->holder_list;
 
         while (candidate) {
                 if (candidate->owner == cur_thread)
@@ -606,7 +606,7 @@ static bool mutex_info_show(struct mutex_info *mi) {
 
 static bool mutex_info_dump(struct mutex_info *mi) {
         char *stacktrace_str;
-        struct detailed_info *locked_from;
+        struct location_stats *locked_from;
 
         if (!mutex_info_show(mi))
                 return false;
@@ -619,7 +619,7 @@ static bool mutex_info_dump(struct mutex_info *mi) {
 
         free(stacktrace_str);
 
-        locked_from = mi->details;
+        locked_from = mi->locked_from;
 
         while (locked_from) {
                 if (locked_from->n_blocker || locked_from->n_blockee)
@@ -1173,24 +1173,24 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex) {
 }
 
 static void update_blocking_counts(struct mutex_info *mi, const char *blockee_stacktrace) {
-        struct detailed_info *blockee_callpoint;
+        struct location_stats *blockee_callpoint;
         struct thread_info *blocker_ti;
 
-        blocker_ti = mi->holder_details;
+        blocker_ti = mi->holder_list;
 
         while (blocker_ti) {
-                if (!blocker_ti->details && blocker_ti->stacktrace)
-                        /* find_add_details modifies mi with the pointer, if necessary */
-                        blocker_ti->details = find_add_details(mi, blocker_ti->stacktrace);
+                if (!blocker_ti->locked_from && blocker_ti->stacktrace)
+                        /* find_locking_location modifies mi with the pointer, if necessary */
+                        blocker_ti->locked_from = find_locking_location(mi, blocker_ti->stacktrace);
 
-                if (blocker_ti->details)
-                        blocker_ti->details->n_blocker++;
+                if (blocker_ti->locked_from)
+                        blocker_ti->locked_from->n_blocker++;
 
                 blocker_ti = blocker_ti->next;
         }
 
-        /* find_add_details modifies mi with the pointer, if necessary */
-        blockee_callpoint = find_add_details(mi, blockee_stacktrace);
+        /* find_locking_location modifies mi with the pointer, if necessary */
+        blockee_callpoint = find_locking_location(mi, blockee_stacktrace);
         blockee_callpoint->n_blockee++;
 }
 
@@ -1249,9 +1249,9 @@ static void generic_lock(struct mutex_info *mi, bool busy, bool for_write, uint6
         if (mi->n_lock_level == 1) {
                 struct thread_info *t;
 
-                while (mi->holder_details) {
-                        t = mi->holder_details;
-                        mi->holder_details = t->next;
+                while (mi->holder_list) {
+                        t = mi->holder_list;
+                        mi->holder_list = t->next;
                         if (t->stacktrace)
                                 free(t->stacktrace);
                         free(t);
@@ -1263,8 +1263,8 @@ static void generic_lock(struct mutex_info *mi, bool busy, bool for_write, uint6
                 mi->nsec_timestamp = nsec_now();
         }
 
-        this_ti->next = mi->holder_details;
-        mi->holder_details = this_ti;
+        this_ti->next = mi->holder_list;
+        mi->holder_list = this_ti;
 
         if (mi->last_owner != tid) {
                 if (mi->last_owner != 0)
