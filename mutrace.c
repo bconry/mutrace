@@ -65,8 +65,14 @@
 
 #define FP_NS_PER_MS 1000000.0
 
+struct stacktrace_info {
+        void **frames;
+        int nb_frame;
+        char *as_string;
+};
+
 struct location_stats {
-        char *stacktrace;
+        struct stacktrace_info stacktrace;
 
         unsigned n_blocker;
         unsigned n_blockee;
@@ -76,14 +82,9 @@ struct location_stats {
 
 struct thread_info {
         pid_t owner;
-        char *stacktrace;
+        struct stacktrace_info stacktrace;
         struct location_stats *locked_from;
         struct thread_info *next;
-};
-
-struct stacktrace_info {
-        void **frames;
-        int nb_frame;
 };
 
 struct mutex_info {
@@ -130,7 +131,11 @@ struct mutex_info {
 };
 
 static unsigned hash_size = 3371; /* probably a good idea to pick a prime here */
-static unsigned frames_max = 16;
+#ifndef MUTRACE_DEFAULT_FRAMES_MAX
+#   define MUTRACE_DEFAULT_FRAMES_MAX 16
+#endif
+static unsigned frames_max = MUTRACE_DEFAULT_FRAMES_MAX;
+static unsigned frames_memsize = MUTRACE_DEFAULT_FRAMES_MAX * sizeof(void*);
 
 static volatile unsigned n_broken = 0;
 static volatile unsigned n_collisions = 0;
@@ -195,7 +200,7 @@ static uint64_t nsec_timestamp_setup;
 static void setup(void) __attribute ((constructor));
 static void shutdown(void) __attribute ((destructor));
 
-static char *stacktrace_to_string(struct stacktrace_info stacktrace);
+static const char *stacktrace_to_string(struct stacktrace_info stacktrace);
 
 static void sigusr1_cb(int sig);
 
@@ -365,10 +370,13 @@ static void setup(void) {
                 hash_size = t;
 
         t = frames_max;
-        if (parse_env("MUTRACE_FRAMES", &t) < 0 || t <= 0)
+        if (parse_env("MUTRACE_FRAMES", &t) < 0 || t <= 0) {
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_FRAMES.\n");
-        else
+        }
+        else {
                 frames_max = t;
+                frames_memsize = frames_max * sizeof(void*);
+        }
 
         t = show_n_locked_min;
         if (parse_env("MUTRACE_LOCKED_MIN", &t) < 0)
@@ -477,14 +485,15 @@ static void unlock_hash_mutex(unsigned u) {
         assert(r == 0);
 }
 
-static struct location_stats *find_locking_location(struct mutex_info *mi, const char *stacktrace) {
+/* the memory pointed to by stacktrace.frames is owned by some caller up the stack */
+static struct location_stats *find_locking_location(struct mutex_info *mi, const struct stacktrace_info stacktrace) {
         struct location_stats *candidate, **pcandidate;
 
         pcandidate = &(mi->locked_from);
         candidate = mi->locked_from;
 
         while (candidate) {
-                if (!strcmp(candidate->stacktrace, stacktrace))
+                if (!memcmp(*(candidate->stacktrace.frames), *(stacktrace.frames), frames_memsize))
                         return candidate;
 
                 pcandidate = &(candidate->next);
@@ -495,9 +504,12 @@ static struct location_stats *find_locking_location(struct mutex_info *mi, const
 
         assert(*pcandidate);
 
-        (*pcandidate)->stacktrace = strdup(stacktrace);
+        (*pcandidate)->stacktrace.frames = calloc(frames_max, sizeof(void*));
 
-        assert((*pcandidate)->stacktrace);
+        assert((*pcandidate)->stacktrace.frames);
+
+        memcpy( *((*pcandidate)->stacktrace.frames), *(stacktrace.frames), frames_memsize );
+        (*pcandidate)->stacktrace.nb_frame = stacktrace.nb_frame;
 
         return *pcandidate;
 }
@@ -605,19 +617,14 @@ static bool mutex_info_show(struct mutex_info *mi) {
 }
 
 static bool mutex_info_dump(struct mutex_info *mi) {
-        char *stacktrace_str;
         struct location_stats *locked_from;
 
         if (!mutex_info_show(mi))
                 return false;
 
-        stacktrace_str = stacktrace_to_string(mi->origin_stacktrace);
-
         fprintf(stderr,
                 "\nMutex #%u (0x%p) first referenced by:\n"
-                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, stacktrace_str);
-
-        free(stacktrace_str);
+                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, stacktrace_to_string(mi->origin_stacktrace));
 
         locked_from = mi->locked_from;
 
@@ -625,7 +632,7 @@ static bool mutex_info_dump(struct mutex_info *mi) {
                 if (locked_from->n_blocker || locked_from->n_blockee)
                         fprintf(stderr,
                                 "    contentious location: blocked %u times, blocker %u times\n"
-                                "%s", locked_from->n_blocker, locked_from->n_blockee, locked_from->stacktrace);
+                                "%s", locked_from->n_blocker, locked_from->n_blockee, stacktrace_to_string( locked_from->stacktrace ));
 
                 locked_from = locked_from->next;
         }
@@ -972,16 +979,10 @@ static int light_backtrace(void **buffer, int size) {
 #endif
 }
 
-/*
- * FIXME
- * The conversion from string stacktraces to structure stacktraces is woefully
- * incomplete, such that the code won't even compile.
- * I have an unrelated change that I want to commit before tackling this.
- */
 static struct stacktrace_info generate_stacktrace(void) {
         struct stacktrace_info stacktrace;
 
-        stacktrace.frames = malloc(sizeof(void*) * frames_max);
+        stacktrace.frames = calloc(frames_max, sizeof(void*));
         assert(stacktrace.frames);
 
         stacktrace.nb_frame = light_backtrace(stacktrace.frames, frames_max);
@@ -990,11 +991,14 @@ static struct stacktrace_info generate_stacktrace(void) {
         return stacktrace;
 }
 
-static char *stacktrace_to_string(struct stacktrace_info stacktrace) {
+static const char *stacktrace_to_string(struct stacktrace_info stacktrace) {
         char **strings, *ret, *p;
         int i;
         size_t k;
         bool b;
+
+        if (stacktrace.as_string != NULL)
+                return stacktrace.as_string;
 
         strings = real_backtrace_symbols(stacktrace.frames, stacktrace.nb_frame);
         assert(strings);
@@ -1030,6 +1034,8 @@ static char *stacktrace_to_string(struct stacktrace_info stacktrace) {
         *p = 0;
 
         free(strings);
+
+        stacktrace.as_string = ret;
 
         return ret;
 }
@@ -1172,14 +1178,15 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex) {
         return real_pthread_mutex_destroy(mutex);
 }
 
-static void update_blocking_counts(struct mutex_info *mi, const char *blockee_stacktrace) {
+/* the memory pointed to by blockee_stacktrace.frames is owned by the caller */
+static void update_blocking_counts(struct mutex_info *mi, const struct stacktrace_info blockee_stacktrace) {
         struct location_stats *blockee_callpoint;
         struct thread_info *blocker_ti;
 
         blocker_ti = mi->holder_list;
 
         while (blocker_ti) {
-                if (!blocker_ti->locked_from && blocker_ti->stacktrace)
+                if (!blocker_ti->locked_from && blocker_ti->stacktrace.nb_frame)
                         /* find_locking_location modifies mi with the pointer, if necessary */
                         blocker_ti->locked_from = find_locking_location(mi, blocker_ti->stacktrace);
 
@@ -1252,8 +1259,12 @@ static void generic_lock(struct mutex_info *mi, bool busy, bool for_write, uint6
                 while (mi->holder_list) {
                         t = mi->holder_list;
                         mi->holder_list = t->next;
-                        if (t->stacktrace)
-                                free(t->stacktrace);
+                        if (t->stacktrace.nb_frame) {
+                                free(t->stacktrace.frames);
+
+                                if (t->stacktrace.as_string)
+                                        free(t->stacktrace.as_string);
+                        }
                         free(t);
                 }
 
@@ -2062,11 +2073,11 @@ static void irwlock_upgrade_failed(isc_rwlock_t *rwl) {
         mi->n_contended++;
 
         if (mi->detailed_tracking) {
-                char *this_stacktrace = generate_stacktrace();
+                struct stacktrace_info this_stacktrace = generate_stacktrace();
 
                 update_blocking_counts(mi, this_stacktrace);
 
-                free(this_stacktrace);
+                free(this_stacktrace.frames);
         }
         else if (detail_contentious_isc_rwlocks && mi->n_contended > 10000) {
                 mi->detailed_tracking = true;
