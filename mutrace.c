@@ -118,7 +118,7 @@ struct mutex_info {
         uint64_t nsec_write_contended_max; /* rwlocks only */
 
         uint64_t nsec_timestamp;
-        struct stacktrace_info stacktrace;
+        struct stacktrace_info origin_stacktrace;
 
         unsigned id;
 
@@ -611,7 +611,7 @@ static bool mutex_info_dump(struct mutex_info *mi) {
         if (!mutex_info_show(mi))
                 return false;
 
-        stacktrace_str = stacktrace_to_string(mi->stacktrace);
+        stacktrace_str = stacktrace_to_string(mi->origin_stacktrace);
 
         fprintf(stderr,
                 "\nMutex #%u (0x%p) first referenced by:\n"
@@ -1049,7 +1049,7 @@ static struct mutex_info *mutex_info_add(unsigned long u, pthread_mutex_t *mutex
         mi->type = type;
         mi->protocol = protocol;
         mi->is_rw = false;
-        mi->stacktrace = generate_stacktrace();
+        mi->origin_stacktrace = generate_stacktrace();
 
         mi->next = alive_mutexes[u];
         alive_mutexes[u] = mi;
@@ -1556,7 +1556,7 @@ static struct mutex_info *rwlock_info_add(unsigned long u, pthread_rwlock_t *rwl
         mi->rwlock = rwlock;
         mi->kind = kind;
         mi->is_rw = true;
-        mi->stacktrace = generate_stacktrace();
+        mi->origin_stacktrace = generate_stacktrace();
 
         mi->next = alive_mutexes[u];
         alive_mutexes[u] = mi;
@@ -1916,7 +1916,7 @@ static struct mutex_info *isc_rwlock_info_add(unsigned long u, isc_rwlock_t *rwl
 
         mi->rwl = rwl;
         mi->is_rw = true;
-        mi->stacktrace = generate_stacktrace();
+        mi->origin_stacktrace = generate_stacktrace();
 
         mi->next = alive_mutexes[u];
         alive_mutexes[u] = mi;
