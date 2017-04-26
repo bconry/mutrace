@@ -18,9 +18,9 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with mutrace. If not, see <http://www.gnu.org/licenses/>.
 
-AC_PREREQ(2.61)
+AC_PREREQ([2.68])
 
-AC_INIT([mutrace], 0.2, [mzzhgenpr (at) 0pointer (dot) net])
+AC_INIT([mutrace], [0.2], [mzzhgenpr (at) 0pointer (dot) net])
 AC_CONFIG_SRCDIR([mutrace.c])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR(m4)
@@ -53,7 +53,8 @@ AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_CXX
 
 # GCC flags
-CC_CHECK_CFLAGS_APPEND([-Wall -W -Wextra -pipe -Wno-long-long -Winline -Wvla -Wno-overlength-strings -Wunsafe-loop-optimizations -Wundef -Wformat=2 -Wlogical-op -Wsign-compare -Wformat-security -Wmissing-include-dirs -Wformat-nonliteral -Wold-style-definition -Wpointer-arith -Winit-self -Wdeclaration-after-statement -Wfloat-equal -Wmissing-prototypes -Wstrict-prototypes -Wredundant-decls -Wmissing-declarations -Wmissing-noreturn -Wshadow -Wendif-labels -Wcast-align -Wwrite-strings -Wno-unused-parameter -Wno-strict-aliasing -ffast-math -Wp,-D_FORTIFY_SOURCE=2 -fno-common -fdiagnostics-show-option -fno-omit-frame-pointer])
+
+AX_APPEND_COMPILE_FLAGS([-Wall -W -Wextra -pipe -Wno-long-long -Winline -Wvla -Wno-overlength-strings -Wunsafe-loop-optimizations -Wundef -Wformat=2 -Wlogical-op -Wsign-compare -Wformat-security -Wmissing-include-dirs -Wformat-nonliteral -Wold-style-definition -Wpointer-arith -Winit-self -Wdeclaration-after-statement -Wfloat-equal -Wmissing-prototypes -Wstrict-prototypes -Wredundant-decls -Wmissing-declarations -Wmissing-noreturn -Wshadow -Wendif-labels -Wcast-align -Wwrite-strings -Wno-unused-parameter -Wno-strict-aliasing -ffast-math -Wp,-D_FORTIFY_SOURCE=2 -fno-common -fdiagnostics-show-option -fno-omit-frame-pointer])
 
 #### libtool stuff ####
 
@@ -86,7 +87,6 @@ AC_TYPE_SIZE_T
 AC_CHECK_TYPES(ssize_t, , [AC_DEFINE([ssize_t], [signed long],
     [Define ssize_t if it is not done by the standard libs.])])
 AC_TYPE_OFF_T
-AC_TYPE_SIGNAL
 AC_TYPE_UID_T
 AC_TYPE_UINT64_T
 
@@ -98,7 +98,7 @@ AC_CHECK_FUNCS([clock_gettime])
 
 AC_SYS_LARGEFILE
 
-ACX_PTHREAD
+AX_PTHREAD
 
 ###################################
 #            Output               #
