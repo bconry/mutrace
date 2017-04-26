@@ -38,6 +38,7 @@
 #include <sched.h>
 #include <malloc.h>
 #include <signal.h>
+#include <math.h>
 
 #include <isc/types.h>
 #include <isc/result.h>
@@ -148,9 +149,10 @@ static unsigned show_n_max = 10;
 
 static bool raise_trap = false;
 static bool track_rt = false;
-static bool detail_contentious_mutexes = true;
+/* TODO: detail_contentious_* need to be settable from environment variables */
+static bool detail_contentious_mutexes = false;
 static bool detail_contentious_rwlocks = false;
-static bool detail_contentious_isc_rwlocks = true;
+static bool detail_contentious_isc_rwlocks = false;
 
 static int (*real_pthread_mutex_init)(pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexattr) = NULL;
 static int (*real_pthread_mutex_destroy)(pthread_mutex_t *mutex) = NULL;
@@ -197,9 +199,59 @@ static volatile bool threads_existing = false;
 
 static uint64_t nsec_timestamp_setup;
 
+/* Must be kept in sync with summary_order_details. */
+typedef enum {
+        ORDER_ID = 0,
+        ORDER_N_LOCKED,
+        ORDER_N_OWNER_CHANGED,
+        ORDER_N_CONTENDED,
+        ORDER_NSEC_LOCKED_TOTAL,
+        ORDER_NSEC_LOCKED_MAX,
+        ORDER_NSEC_LOCKED_AVG,
+        ORDER_NSEC_CONTENDED_TOTAL,
+        ORDER_NSEC_CONTENDED_AVG,
+        ORDER_NSEC_READ_CONTENDED_TOTAL,
+        ORDER_NSEC_READ_CONTENDED_MAX,
+        ORDER_NSEC_READ_CONTENDED_AVG,
+        ORDER_NSEC_WRITE_CONTENDED_TOTAL,
+        ORDER_NSEC_WRITE_CONTENDED_MAX,
+        ORDER_NSEC_WRITE_CONTENDED_AVG,
+
+        ORDER_INVALID, /* MUST STAY LAST */
+} SummaryOrder;
+
+typedef struct {
+        const char *command; /* as passed to --order command line argument */
+        const char *ui_string; /* as displayed by show_summary() */
+} SummaryOrderDetails;
+
+/* Must be kept in sync with SummaryOrder. */
+static const SummaryOrderDetails summary_order_details[] = {
+        { "id", "mutex number" },
+        { "n-locked", "lock count" },
+        { "n-owner-changed", "owner change count" },
+        { "n-contended", "contention count" },
+        { "nsec-locked-total", "total time locked" },
+        { "nsec-locked-max", "maximum time locked" },
+        { "nsec-locked-avg", "average time locked" },
+        { "nsec-contended-total", "total time contended" },
+        { "nsec-contended-avg", "average time contended" },
+        { "nsec-read-contended-total", "total time (read) contended" },
+        { "nsec-read-contended-max", "maximum time (read) contended" },
+        { "nsec-read-contended-avg", "average time (read) contended" },
+        { "nsec-write-contended-total", "total time (write) contended" },
+        { "nsec-write-contended-max", "maximum time (write) contended" },
+        { "nsec-write-contended-avg", "average time (write) contended" },
+};
+
+static SummaryOrder summary_order = ORDER_N_CONTENDED;
+
+static int parse_env_summary_order(const char *n, unsigned *t);
+
 static void setup(void) __attribute ((constructor));
 static void shutdown(void) __attribute ((destructor));
 
+/* the struct stactrace_info owns and keeps a pointer to the returned string */
 static const char *stacktrace_to_string(struct stacktrace_info stacktrace);
 
 static void sigusr1_cb(int sig);
@@ -232,7 +284,7 @@ static const char *get_prname(void) {
         return prname;
 }
 
-static int parse_env(const char *n, unsigned *t) {
+static int parse_env_unsigned(const char *n, unsigned *t) {
         const char *e;
         char *x = NULL;
         unsigned long ul;
@@ -251,6 +303,35 @@ static int parse_env(const char *n, unsigned *t) {
                 return -1;
 
         return 0;
+}
+
+static int parse_env_summary_order(const char *n, unsigned *t) {
+        const char *e;
+        unsigned int i;
+
+        if (!(e = getenv(n)))
+                return 0;
+
+        for (i = ORDER_ID; i < ORDER_INVALID; i++) {
+                if (strcmp(e, summary_order_details[i].command) == 0) {
+                        *t = i;
+                        return 0;
+                }
+        }
+
+        return -1;
+}
+
+/* Maximum tolerated relative error when comparing doubles */
+/* TODO: consider making this settable via an environment variable */
+#define MAX_RELATIVE_ERROR 0.001
+
+static bool doubles_equal(double a, double b) {
+        /* Make sure we don't divide by zero. */
+        if (fpclassify(b) == FP_ZERO)
+                return (fpclassify(a) == FP_ZERO);
+
+        return ((a - b) / b <= MAX_RELATIVE_ERROR);
 }
 
 #define LOAD_FUNC(name)                                                 \
@@ -364,13 +445,13 @@ static void setup(void) {
         }
 
         t = hash_size;
-        if (parse_env("MUTRACE_HASH_SIZE", &t) < 0 || t <= 0)
+        if (parse_env_unsigned("MUTRACE_HASH_SIZE", &t) < 0 || t == 0)
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_HASH_SIZE.\n");
         else
                 hash_size = t;
 
         t = frames_max;
-        if (parse_env("MUTRACE_FRAMES", &t) < 0 || t <= 0) {
+        if (parse_env_unsigned("MUTRACE_FRAMES", &t) < 0 || t == 0) {
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_FRAMES.\n");
         }
         else {
@@ -379,28 +460,36 @@ static void setup(void) {
         }
 
         t = show_n_locked_min;
-        if (parse_env("MUTRACE_LOCKED_MIN", &t) < 0)
+        if (parse_env_unsigned("MUTRACE_LOCKED_MIN", &t) < 0)
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_LOCKED_MIN.\n");
         else
                 show_n_locked_min = t;
 
         t = show_n_owner_changed_min;
-        if (parse_env("MUTRACE_OWNER_CHANGED_MIN", &t) < 0)
+        if (parse_env_unsigned("MUTRACE_OWNER_CHANGED_MIN", &t) < 0)
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_OWNER_CHANGED_MIN.\n");
         else
                 show_n_owner_changed_min = t;
 
         t = show_n_contended_min;
-        if (parse_env("MUTRACE_CONTENDED_MIN", &t) < 0)
+        if (parse_env_unsigned("MUTRACE_CONTENDED_MIN", &t) < 0)
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_CONTENDED_MIN.\n");
         else
                 show_n_contended_min = t;
 
         t = show_n_max;
-        if (parse_env("MUTRACE_MAX", &t) < 0)
+        if (parse_env_unsigned("MUTRACE_MAX", &t) < 0)
                 fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_MAX.\n");
         else
                 show_n_max = t;
+
+        t = summary_order;
+        if (parse_env_summary_order("MUTRACE_SUMMARY_ORDER", &t) < 0) {
+                fprintf(stderr, "mutrace: WARNING: Failed to parse $MUTRACE_SUMMARY_ORDER.\n");
+        }
+        else {
+                summary_order = t;
+        }
 
         if (getenv("MUTRACE_TRAP"))
                 raise_trap = true;
@@ -529,65 +618,103 @@ static struct thread_info *find_thread(struct mutex_info *mi, pid_t cur_thread) 
         return candidate;
 }
 
+/*
+ * Note that mutex_info_compare sorts the data in descending order
+ * because that's how we're going to use it
+ */
 static int mutex_info_compare(const void *_a, const void *_b) {
         const struct mutex_info
                 *a = *(const struct mutex_info**) _a,
                 *b = *(const struct mutex_info**) _b;
+        double a_avg, b_avg;
 
-        if (a->n_contended > b->n_contended)
-                return -1;
-        else if (a->n_contended < b->n_contended)
-                return 1;
+        #define ORDER_COUNT(metric) \
+                if (a->metric > b->metric) \
+                        return -1; \
+                else if (a->metric < b->metric) \
+                        return 1;
 
-        if (a->nsec_contended_max > b->nsec_contended_max)
-                return -1;
-        else if (a->nsec_contended_max < b->nsec_contended_max)
-                return 1;
+        #define ORDER_AVG(metric, metric_counter) \
+                if (a->metric_counter > 0 && b->metric_counter > 0) { \
+                        a_avg = a->metric / a->metric_counter; \
+                        b_avg = b->metric / b->metric_counter; \
+                        if (!doubles_equal(a_avg, b_avg)) \
+                                return ((a_avg - b_avg) < 0.0) ? -1 : 1; \
+                }
 
-        if (a->nsec_contended_total > b->nsec_contended_total)
-                return -1;
-        else if (a->nsec_contended_total < b->nsec_contended_total)
-                return 1;
+        /* Order by the user's chosen ordering first, then fall back to a static
+         * ordering. */
+        switch (summary_order) {
+                case ORDER_ID:
+                        ORDER_COUNT(id);
+                        break;
+                case ORDER_N_LOCKED:
+                        ORDER_COUNT(n_locked);
+                        break;
+                case ORDER_N_OWNER_CHANGED:
+                        ORDER_COUNT(n_owner_changed);
+                        break;
+                case ORDER_N_CONTENDED:
+                        ORDER_COUNT(n_contended);
+                        break;
+                case ORDER_NSEC_LOCKED_TOTAL:
+                        ORDER_COUNT(nsec_locked_total);
+                        break;
+                case ORDER_NSEC_LOCKED_MAX:
+                        ORDER_COUNT(nsec_locked_max);
+                        break;
+                case ORDER_NSEC_LOCKED_AVG:
+                        ORDER_AVG(nsec_locked_total, n_locked);
+                        break;
+                case ORDER_NSEC_CONTENDED_TOTAL:
+                        ORDER_COUNT(nsec_contended_total);
+                        break;
+                case ORDER_NSEC_CONTENDED_AVG:
+                        ORDER_AVG(nsec_contended_total, n_contended);
+                        break;
+                case ORDER_NSEC_READ_CONTENDED_TOTAL:
+                        ORDER_COUNT(nsec_read_contended_total);
+                        break;
+                case ORDER_NSEC_READ_CONTENDED_MAX:
+                        ORDER_COUNT(nsec_read_contended_max);
+                        break;
+                case ORDER_NSEC_READ_CONTENDED_AVG:
+                        ORDER_AVG(nsec_read_contended_total, n_contended);
+                        break;
+                case ORDER_NSEC_WRITE_CONTENDED_TOTAL:
+                        ORDER_COUNT(nsec_write_contended_total);
+                        break;
+                case ORDER_NSEC_WRITE_CONTENDED_MAX:
+                        ORDER_COUNT(nsec_write_contended_max);
+                        break;
+                case ORDER_NSEC_WRITE_CONTENDED_AVG:
+                        ORDER_AVG(nsec_write_contended_total, n_contended);
+                        break;
+                default:
+                        /* Should never be reached. */
+                        assert(0);
+        }
 
-        if (a->nsec_read_contended_max > b->nsec_read_contended_max)
-                return -1;
-        else if (a->nsec_read_contended_max < b->nsec_read_contended_max)
-                return 1;
+        /* Fall back to a static ordering. */
+        ORDER_COUNT(n_contended);
+        ORDER_COUNT(nsec_contended_max);
+        ORDER_COUNT(nsec_contended_total);
+        ORDER_AVG(nsec_contended_total, n_contended);
+        ORDER_COUNT(nsec_read_contended_max);
+        ORDER_COUNT(nsec_read_contended_total);
+        ORDER_AVG(nsec_read_contended_total, n_contended);
+        ORDER_COUNT(nsec_write_contended_max);
+        ORDER_COUNT(nsec_write_contended_total);
+        ORDER_AVG(nsec_write_contended_total, n_contended);
+        ORDER_COUNT(n_owner_changed);
+        ORDER_COUNT(n_locked);
+        ORDER_COUNT(nsec_locked_max);
+        ORDER_COUNT(nsec_locked_total);
+        ORDER_AVG(nsec_locked_total, n_locked);
+        ORDER_COUNT(id);
 
-        if (a->nsec_read_contended_total > b->nsec_read_contended_total)
-                return -1;
-        else if (a->nsec_read_contended_total < b->nsec_read_contended_total)
-                return 1;
-
-        if (a->nsec_write_contended_max > b->nsec_write_contended_max)
-                return -1;
-        else if (a->nsec_write_contended_max < b->nsec_write_contended_max)
-                return 1;
-
-        if (a->nsec_write_contended_total > b->nsec_write_contended_total)
-                return -1;
-        else if (a->nsec_write_contended_total < b->nsec_write_contended_total)
-                return 1;
-
-        if (a->n_owner_changed > b->n_owner_changed)
-                return -1;
-        else if (a->n_owner_changed < b->n_owner_changed)
-                return 1;
-
-        if (a->n_locked > b->n_locked)
-                return -1;
-        else if (a->n_locked < b->n_locked)
-                return 1;
-
-        if (a->nsec_locked_max > b->nsec_locked_max)
-                return -1;
-        else if (a->nsec_locked_max < b->nsec_locked_max)
-                return 1;
-
-        if (a->nsec_locked_total > b->nsec_locked_total)
-                return -1;
-        else if (a->nsec_locked_total < b->nsec_locked_total)
-                return 1;
+        #undef ORDER_AVG
+        #undef ORDER_COUNT
 
         /* Let's make the output deterministic */
         if (a > b)
@@ -791,10 +918,10 @@ static void show_summary_internal(void) {
         if (m > 0) {
                 fprintf(stderr,
                         "\n"
-                        "mutrace: Showing %u most contended mutexes:\n"
+                        "mutrace: Showing %u mutexes in order of %s:\n"
                         "\n"
                         " Mutex #   Locked  Changed    Cont. tot.Time[ms] avg.Time[ms] max.Time[ms] tot.Cont[ms] avg.Cont[ms] max.Cont[ms]  Flags\n",
-                        m);
+                        m, summary_order_details[summary_order].ui_string);
 
                 for (i = 0, m = 0; i < n && (show_n_max <= 0 || m < show_n_max); i++)
                         m += mutex_info_stat(table[i]) ? 1 : 0;
