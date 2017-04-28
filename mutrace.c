@@ -1643,6 +1643,12 @@ static struct mutex_info *mutex_info_acquire(pthread_mutex_t *mutex) {
          * but for some reason isn't on our list of alive mutexes.
          * Use the same defaults for type and protocol that we use
          * in pthread_mutex_init when no mutexattr is passed.
+         * The alternative is to to init a mutexattr, use it to
+         * get both the type and protocol, and then destroy it.
+         * In theory this should never happen, but if someone has
+         * has situations where it does, they should consider
+         * themselves encouraged to write the code to do this
+         * properly.
          */
         return mutex_info_add(u, mutex, PTHREAD_MUTEX_NORMAL, PTHREAD_PRIO_NONE);
 }
@@ -2428,7 +2434,13 @@ static struct mutex_info *rwlock_info_acquire(pthread_rwlock_t *rwlock) {
          * This is a rwlock that's being either locked or unlocked
          * but for some reason isn't on our list of alive mutexes.
          * Use the same defaults for type and protocol that we use
-         * in pthread_rwlock_init when no mutexattr is passed.
+         * in pthread_rwlock_init when no attr is passed.
+         * The alternative is to to init an attr, use it to
+         * get the kind and then destroy it.
+         * In theory this should never happen, but if someone has
+         * has situations where it does, they should consider
+         * themselves encouraged to write the code to do this
+         * properly.
          */
         return rwlock_info_add(u, rwlock, PTHREAD_RWLOCK_DEFAULT_NP);
 }
