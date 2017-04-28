@@ -2433,8 +2433,8 @@ static struct mutex_info *rwlock_info_acquire(pthread_rwlock_t *rwlock) {
         /*
          * This is a rwlock that's being either locked or unlocked
          * but for some reason isn't on our list of alive mutexes.
-         * Use the same defaults for type and protocol that we use
-         * in pthread_rwlock_init when no attr is passed.
+         * Use the same default for kind that we use in
+         * pthread_rwlock_init when no attr is passed.
          * The alternative is to to init an attr, use it to
          * get the kind and then destroy it.
          * In theory this should never happen, but if someone has
