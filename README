@@ -6,6 +6,10 @@ GIT:
 GITWEB:
         http://git.0pointer.de/?p=mutrace.git
 
+USAGE:
+        matrace [matrace-options] <command>
+        mutrace [mutrace-options] <command>
+
 NOTES:
         For a terse overview what mutrace can do for you, please read
         the announcement blog story:
