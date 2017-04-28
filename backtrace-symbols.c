@@ -51,6 +51,11 @@
 #include <execinfo.h>
 #include "config.h"
 #include <bfd.h>
+/*
+ * FIXME:
+ * the location of libiberty.h should be detected at bootstrap
+ * rather than being hardcoded to one place or the other
+ */
 #include <libiberty/libiberty.h>
 #include <dlfcn.h>
 #include <link.h>

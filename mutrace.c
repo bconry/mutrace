@@ -196,6 +196,7 @@ static unsigned show_n_read_contended_min = 0;
 static unsigned show_n_owner_changed_min = 2;
 static unsigned show_n_max = 10;
 
+static bool full_backtrace = false;
 static bool raise_trap = false;
 static bool track_rt = false;
 /* TODO: detail_contentious_* need to be settable from environment variables */
@@ -209,16 +210,14 @@ static int (*real_pthread_mutex_lock)(pthread_mutex_t *mutex) = NULL;
 static int (*real_pthread_mutex_trylock)(pthread_mutex_t *mutex) = NULL;
 static int (*real_pthread_mutex_timedlock)(pthread_mutex_t *mutex, const struct timespec *abstime) = NULL;
 static int (*real_pthread_mutex_unlock)(pthread_mutex_t *mutex) = NULL;
-
 static int (*real_pthread_cond_init)(pthread_cond_t *cond, const pthread_condattr_t *attr) = NULL;
 static int (*real_pthread_cond_destroy)(pthread_cond_t *cond) = NULL;
 static int (*real_pthread_cond_signal)(pthread_cond_t *cond) = NULL;
 static int (*real_pthread_cond_broadcast)(pthread_cond_t *cond) = NULL;
 static int (*real_pthread_cond_wait)(pthread_cond_t *cond, pthread_mutex_t *mutex) = NULL;
 static int (*real_pthread_cond_timedwait)(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) = NULL;
-
 static int (*real_pthread_create)(pthread_t *newthread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg) = NULL;
-
+static void (*real_pthread_exit)(void *retval) __attribute__((noreturn)) = NULL;
 static int (*real_pthread_rwlock_init)(pthread_rwlock_t *rwlock, const pthread_rwlockattr_t *attr) = NULL;
 static int (*real_pthread_rwlock_destroy)(pthread_rwlock_t *rwlock) = NULL;
 static int (*real_pthread_rwlock_rdlock)(pthread_rwlock_t *rwlock) = NULL;
@@ -487,6 +486,7 @@ static void load_functions(void) {
         LOAD_FUNC(pthread_mutex_timedlock);
         LOAD_FUNC(pthread_mutex_unlock);
         LOAD_FUNC(pthread_create);
+        LOAD_FUNC(pthread_exit);
         LOAD_FUNC(pthread_rwlock_init);
         LOAD_FUNC(pthread_rwlock_destroy);
         LOAD_FUNC(pthread_rwlock_rdlock);
@@ -644,6 +644,9 @@ static void setup(void) {
 
         if (getenv("MUTRACE_TRACK_RT"))
                 track_rt = true;
+
+        if (getenv("MUTRACE_FULL_BACKTRACE")
+                full_backtrace = true;
 
         /* Set up the mutex hash table. */
         alive_mutexes = calloc(hash_size, sizeof(struct mutex_info*));
@@ -1492,28 +1495,30 @@ static int light_backtrace(void **buffer, int size) {
         void *stackaddr;
         size_t stacksize;
         void *frame;
-
         pthread_attr_t attr;
-        pthread_getattr_np(pthread_self(), &attr);
-        pthread_attr_getstack(&attr, &stackaddr, &stacksize);
-        pthread_attr_destroy(&attr);
+
+        if (!full_backtrace){
+                pthread_getattr_np(pthread_self(), &attr);
+                pthread_attr_getstack(&attr, &stackaddr, &stacksize);
+                pthread_attr_destroy(&attr);
 
 #if defined(__i386__)
-        __asm__("mov %%ebp, %[frame]": [frame] "=r" (frame));
+                __asm__("mov %%ebp, %[frame]": [frame] "=r" (frame));
 #elif defined(__x86_64__)
-        __asm__("mov %%rbp, %[frame]": [frame] "=r" (frame));
+                __asm__("mov %%rbp, %[frame]": [frame] "=r" (frame));
 #endif
-        while (osize < size &&
-               frame >= stackaddr &&
-               frame < (void *)((char *)stackaddr + stacksize)) {
-                buffer[osize++] = *((void **)frame + 1);
-                frame = *(void **)frame;
-        }
+                while (osize < size &&
+                       frame >= stackaddr &&
+                       frame < (void *)((char *)stackaddr + stacksize)) {
+                        buffer[osize++] = *((void **)frame + 1);
+                        frame = *(void **)frame;
+                }
 
-        return osize;
-#else
-        return real_backtrace(buffer, size);
+                return osize;
+        }
 #endif
+
+        return real_backtrace(buffer, size);
 }
 
 static struct stacktrace_info generate_stacktrace(void) {
@@ -2311,6 +2316,17 @@ int pthread_create(pthread_t *newthread,
         }
 
         return real_pthread_create(newthread, attr, start_routine, arg);
+}
+
+void pthread_exit(void *retval) {
+        /* Prevent deadlock:
+         * pthread_exit may call libunwind, which uses a mutex. Mutrace data gathering
+         * will result in a second call to libunwind e.g. through "backtrace", resulting
+         * in a deadlock. (observed on CentOS 6.5)
+         *
+         * As "recursive is thread_local, only need to disable mutrace while exiting a thread */
+        recursive = true;
+        real_pthread_exit(retval);
 }
 
 int backtrace(void **array, int size) {
