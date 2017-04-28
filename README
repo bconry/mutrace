@@ -1,10 +1,10 @@
 MUTRACE Mutex Tracer
 
 GIT:
-        git://git.0pointer.de/mutrace.git
+        https://github.com/bconry/mutrace.git
 
 GITWEB:
-        http://git.0pointer.de/?p=mutrace.git
+        https://github.com/bconry/mutrace
 
 USAGE:
         matrace [matrace-options] <command>
@@ -52,7 +52,18 @@ LICENSE:
         switch on such software.
 
 AUTHORS:
+        Brian Conry
+        Carlo Marcelo Arenas Belon
+        Dana M. Diederich
+        Daniel Suo
+        David Bennett
+        Eric Bollengier
+        Lénaïc Huard
         Lennart Poettering
+        Łukasz Czerwiński
+        Maxime Lubin
+        Michel Alexandre Salim
+        Philip Withnall
 
 REQUIREMENTS:
         Recent gcc, glibc, Linux
