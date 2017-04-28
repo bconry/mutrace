@@ -1638,8 +1638,12 @@ static struct mutex_info *mutex_info_acquire(pthread_mutex_t *mutex) {
                 if (mi->mutex == mutex)
                         return mi;
 
-        /* FIXME: We assume that static mutexes are NORMAL, which
-         * might not actually be correct */
+        /*
+         * This is a mutex that's being either locked or unlocked
+         * but for some reason isn't on our list of alive mutexes.
+         * Use the same defaults for type and protocol that we use
+         * in pthread_mutex_init when no mutexattr is passed.
+         */
         return mutex_info_add(u, mutex, PTHREAD_MUTEX_NORMAL, PTHREAD_PRIO_NONE);
 }
 
@@ -2420,8 +2424,12 @@ static struct mutex_info *rwlock_info_acquire(pthread_rwlock_t *rwlock) {
                 if (mi->rwlock == rwlock)
                         return mi;
 
-        /* FIXME: We assume that static mutexes are RWLOCK_DEFAULT,
-         * which might not actually be correct */
+        /*
+         * This is a rwlock that's being either locked or unlocked
+         * but for some reason isn't on our list of alive mutexes.
+         * Use the same defaults for type and protocol that we use
+         * in pthread_rwlock_init when no mutexattr is passed.
+         */
         return rwlock_info_add(u, rwlock, PTHREAD_RWLOCK_DEFAULT_NP);
 }
 
