@@ -645,7 +645,7 @@ static void setup(void) {
         if (getenv("MUTRACE_TRACK_RT"))
                 track_rt = true;
 
-        if (getenv("MUTRACE_FULL_BACKTRACE")
+        if (getenv("MUTRACE_FULL_BACKTRACE"))
                 full_backtrace = true;
 
         /* Set up the mutex hash table. */
