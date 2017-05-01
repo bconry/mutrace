@@ -4,6 +4,7 @@
 # This file is part of mutrace.
 #
 # Copyright 2009 Lennart Poettering
+# Copyright 2017 Brian Conry
 #
 # mutrace is free software: you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as
@@ -20,14 +21,14 @@
 
 AC_PREREQ([2.68])
 
-AC_INIT([mutrace], [0.2], [mzzhgenpr (at) 0pointer (dot) net])
+AC_INIT([mutrace], [0.3], [bconry (at) isc (dot) org])
 AC_CONFIG_SRCDIR([mutrace.c])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR(m4)
 
 AM_INIT_AUTOMAKE([foreign 1.10 -Wall -Wno-portability tar-pax])
 
-AC_SUBST(PACKAGE_URL, [http://git.0pointer.de/?p=mutrace.git])
+AC_SUBST(PACKAGE_URL, [https://github.com/bconry/mutrace.git])
 
 AC_CANONICAL_HOST
 
@@ -72,6 +73,7 @@ AC_CHECK_HEADERS([sys/poll.h])
 # Other
 AC_CHECK_HEADERS([sys/ioctl.h])
 AC_CHECK_HEADERS([byteswap.h])
+AC_CHECK_HEADERS([isc/rwlock.h])
 
 AC_SEARCH_LIBS([bfd_init], [bfd], [], [AC_MSG_ERROR([*** libbfd not found])])
 AC_CHECK_HEADERS([bfd.h], [], [AC_MSG_ERROR([*** libbfd headers not found])])

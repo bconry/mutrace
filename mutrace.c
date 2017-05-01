@@ -40,14 +40,11 @@
 #include <signal.h>
 #include <math.h>
 
-/*
- * FIXME:
- * these includes ought to be conditional, on at least being detected
- * and maybe also on being requested (if detected)
- */
+#if HAVE_ISC_RWLOCK_H
 #include <isc/types.h>
 #include <isc/result.h>
 #include <isc/rwlock.h>
+#endif
 
 #if !defined (__linux__) || !defined(__GLIBC__)
 #error "This stuff only works on Linux!"
@@ -104,7 +101,9 @@ typedef enum {
 struct mutex_info {
         pthread_mutex_t *mutex;
         pthread_rwlock_t *rwlock;
+#if HAVE_ISC_RWLOCK_H
         isc_rwlock_t *rwl;
+#endif
 
         int type, protocol, kind;
         bool broken:1;
@@ -202,7 +201,9 @@ static bool track_rt = false;
 /* TODO: detail_contentious_* need to be settable from environment variables */
 static bool detail_contentious_mutexes = false;
 static bool detail_contentious_rwlocks = false;
+#if HAVE_ISC_RWLOCK_H
 static bool detail_contentious_isc_rwlocks = false;
+#endif
 
 static int (*real_pthread_mutex_init)(pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexattr) = NULL;
 static int (*real_pthread_mutex_destroy)(pthread_mutex_t *mutex) = NULL;
@@ -228,6 +229,7 @@ static int (*real_pthread_rwlock_trywrlock)(pthread_rwlock_t *rwlock) = NULL;
 static int (*real_pthread_rwlock_timedwrlock)(pthread_rwlock_t *rwlock, const struct timespec *abstime) = NULL;
 static int (*real_pthread_rwlock_unlock)(pthread_rwlock_t *rwlock);
 
+#if HAVE_ISC_RWLOCK_H
 static isc_result_t (*real_isc_rwlock_init)(isc_rwlock_t *rwl, unsigned int read_quota, unsigned int write_quota) = NULL;
 static isc_result_t (*real_isc_rwlock_lock)(isc_rwlock_t *rwl, isc_rwlocktype_t type) = NULL;
 static isc_result_t (*real_isc_rwlock_trylock)(isc_rwlock_t *rwl, isc_rwlocktype_t type) = NULL;
@@ -235,6 +237,7 @@ static isc_result_t (*real_isc_rwlock_unlock)(isc_rwlock_t *rwl, isc_rwlocktype_
 static isc_result_t (*real_isc_rwlock_tryupgrade)(isc_rwlock_t *rwl) = NULL;
 static void (*real_isc_rwlock_downgrade)(isc_rwlock_t *rwl) = NULL;
 static void (*real_isc_rwlock_destroy)(isc_rwlock_t *rwl) = NULL;
+#endif
 
 static void (*real_exit)(int status) __attribute__((noreturn)) = NULL;
 static void (*real__exit)(int status) __attribute__((noreturn)) = NULL;
@@ -507,6 +510,7 @@ static void load_functions(void) {
         LOAD_FUNC_VERSIONED(pthread_cond_wait, "GLIBC_2.3.2");
         LOAD_FUNC_VERSIONED(pthread_cond_timedwait, "GLIBC_2.3.2");
 
+#if HAVE_ISC_RWLOCK_H
         LOAD_FUNC(isc_rwlock_init);
         LOAD_FUNC(isc_rwlock_lock);
         LOAD_FUNC(isc_rwlock_trylock);
@@ -514,6 +518,7 @@ static void load_functions(void) {
         LOAD_FUNC(isc_rwlock_tryupgrade);
         LOAD_FUNC(isc_rwlock_downgrade);
         LOAD_FUNC(isc_rwlock_destroy);
+#endif
 
         LOAD_FUNC(exit);
         LOAD_FUNC(_exit);
@@ -713,6 +718,7 @@ static unsigned long rwlock_hash(pthread_rwlock_t *rwlock) {
         return u % hash_size;
 }
 
+#if HAVE_ISC_RWLOCK_H
 static unsigned long isc_rwlock_hash(isc_rwlock_t *rwl) {
         unsigned long u;
 
@@ -721,6 +727,7 @@ static unsigned long isc_rwlock_hash(isc_rwlock_t *rwl) {
 
         return u % hash_size;
 }
+#endif
 
 static unsigned long cond_hash(pthread_cond_t *cond) {
         unsigned long u;
@@ -1039,8 +1046,14 @@ static bool mutex_info_dump(struct mutex_info *mi) {
                 return false;
 
         fprintf(stderr,
-                "\nMutex #%u (0x%p) first referenced by:\n"
-                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, stacktrace_to_string(&(mi->origin_stacktrace)));
+                "\nMutex #%u (%p) first referenced by:\n"
+                "%s", mi->id,
+#if HAVE_ISC_RWLOCK_H
+                mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl,
+#else
+                mi->mutex ? (void*) mi->mutex : (void*) mi->rwlock,
+#endif
+                stacktrace_to_string(&(mi->origin_stacktrace)));
 
         locked_from = mi->locked_from;
 
@@ -1062,7 +1075,7 @@ static bool cond_info_dump(struct cond_info *ci) {
                 return false;
 
         fprintf(stderr,
-                "\nCondvar #%u (0x%p) first referenced by:\n"
+                "\nCondvar #%u (%p) first referenced by:\n"
                 "%s", ci->id, ci->cond, stacktrace_to_string(&(ci->origin_stacktrace)));
 
         return true;
@@ -2748,6 +2761,7 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rwlock) {
         return real_pthread_rwlock_unlock(rwlock);
 }
 
+#if HAVE_ISC_RWLOCK_H
 static struct mutex_info *isc_rwlock_info_add(unsigned long u, isc_rwlock_t *rwl) {
         struct mutex_info *mi;
 
@@ -3047,4 +3061,5 @@ isc_result_t isc_rwlock_unlock(isc_rwlock_t *rwl, isc_rwlocktype_t type) {
 
         return real_isc_rwlock_unlock(rwl, type);
 }
+#endif
 
