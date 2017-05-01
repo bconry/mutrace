@@ -353,7 +353,7 @@ static void setup(void) __attribute ((constructor));
 static void shutdown(void) __attribute ((destructor));
 
 /* the struct stactrace_info owns and keeps a pointer to the returned string */
-static const char *stacktrace_to_string(struct stacktrace_info stacktrace);
+static const char *stacktrace_to_string(struct stacktrace_info *stacktrace);
 
 static void sigusr1_cb(int sig);
 
@@ -1040,7 +1040,7 @@ static bool mutex_info_dump(struct mutex_info *mi) {
 
         fprintf(stderr,
                 "\nMutex #%u (0x%p) first referenced by:\n"
-                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, stacktrace_to_string(mi->origin_stacktrace));
+                "%s", mi->id, mi->mutex ? (void*) mi->mutex : mi->rwlock ? (void*) mi->rwlock : (void*) mi->rwl, stacktrace_to_string(&(mi->origin_stacktrace)));
 
         locked_from = mi->locked_from;
 
@@ -1048,7 +1048,7 @@ static bool mutex_info_dump(struct mutex_info *mi) {
                 if (locked_from->n_blocker || locked_from->n_blockee)
                         fprintf(stderr,
                                 "    contentious location: blocked %u times, blocker %u times\n"
-                                "%s", locked_from->n_blocker, locked_from->n_blockee, stacktrace_to_string( locked_from->stacktrace ));
+                                "%s", locked_from->n_blocker, locked_from->n_blockee, stacktrace_to_string(&(locked_from->stacktrace)));
 
                 locked_from = locked_from->next;
         }
@@ -1063,7 +1063,7 @@ static bool cond_info_dump(struct cond_info *ci) {
 
         fprintf(stderr,
                 "\nCondvar #%u (0x%p) first referenced by:\n"
-                "%s", ci->id, ci->cond, stacktrace_to_string(ci->origin_stacktrace));
+                "%s", ci->id, ci->cond, stacktrace_to_string(&(ci->origin_stacktrace)));
 
         return true;
 }
@@ -1524,6 +1524,8 @@ static int light_backtrace(void **buffer, int size) {
 static struct stacktrace_info generate_stacktrace(void) {
         struct stacktrace_info stacktrace;
 
+        stacktrace.as_string = NULL;
+
         stacktrace.frames = calloc(frames_max, sizeof(void*));
         assert(stacktrace.frames);
 
@@ -1533,27 +1535,27 @@ static struct stacktrace_info generate_stacktrace(void) {
         return stacktrace;
 }
 
-static const char *stacktrace_to_string(struct stacktrace_info stacktrace) {
+static const char *stacktrace_to_string(struct stacktrace_info *stacktrace) {
         char **strings, *ret, *p;
         int i;
         size_t k;
         bool b;
 
-        if (stacktrace.as_string != NULL)
-                return stacktrace.as_string;
+        if (stacktrace->as_string != NULL)
+                return stacktrace->as_string;
 
-        strings = real_backtrace_symbols(stacktrace.frames, stacktrace.nb_frame);
+        strings = real_backtrace_symbols(stacktrace->frames, stacktrace->nb_frame);
         assert(strings);
 
         k = 0;
-        for (i = 0; i < stacktrace.nb_frame; i++)
+        for (i = 0; i < stacktrace->nb_frame; i++)
                 k += strlen(strings[i]) + 2;
 
         ret = malloc(k + 1);
         assert(ret);
 
         b = false;
-        for (i = 0, p = ret; i < stacktrace.nb_frame; i++) {
+        for (i = 0, p = ret; i < stacktrace->nb_frame; i++) {
                 if (!b && !verify_frame(strings[i]))
                         continue;
 
@@ -1577,7 +1579,7 @@ static const char *stacktrace_to_string(struct stacktrace_info stacktrace) {
 
         free(strings);
 
-        stacktrace.as_string = ret;
+        stacktrace->as_string = ret;
 
         return ret;
 }
