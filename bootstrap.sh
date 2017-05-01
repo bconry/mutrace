@@ -1,8 +1,9 @@
-#!/bin/bash
+#!/bin/sh
 
 # This file is part of mutrace.
 #
 # Copyright 2009 Lennart Poettering
+# Copyright 2017 Brian Conry
 #
 # mutrace is free software: you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as
