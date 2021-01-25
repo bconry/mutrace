@@ -89,12 +89,14 @@ libmutrace_backtrace_symbols_la_CFLAGS = \
 
 mutrace: mutrace.in Makefile
 	sed -e 's,@PACKAGE_STRING\@,$(PACKAGE_STRING),g' \
-                -e 's,@PACKAGE_NAME\@,$(PACKAGE_NAME),g' < $< > $@
+                -e 's,@PACKAGE_NAME\@,$(PACKAGE_NAME),g' \
+                -e 's,@LIBDIR\@,$(libdir),g' < $< > $@
 	chmod +x mutrace
 
 matrace: matrace.in Makefile
 	sed -e 's,@PACKAGE_STRING\@,$(PACKAGE_STRING),g' \
                 -e 's,@PACKAGE_NAME\@,$(PACKAGE_NAME),g' < $< > $@
+
 	chmod +x matrace
 
 install-exec-hook:

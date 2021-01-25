@@ -219,13 +219,13 @@ if [ x"$1" = x ] ; then
 fi
 
 if [ x"$LD_PRELOAD" = x ] ; then
-        export LD_PRELOAD="/usr/local/lib/libmutrace.so"
+        export LD_PRELOAD="@LIBDIR@/libmutrace.so"
 else
-        export LD_PRELOAD="$LD_PRELOAD:/usr/local/lib/libmutrace.so"
+        export LD_PRELOAD="$LD_PRELOAD:@LIBDIR@/libmutrace.so"
 fi
 
 if [ x"$debug_info" = x1 ] ; then
-        export LD_PRELOAD="$LD_PRELOAD:/usr/local/lib/libmutrace-backtrace-symbols.so"
+        export LD_PRELOAD="$LD_PRELOAD:@LIBDIR@/libmutrace-backtrace-symbols.so"
 fi
 
 exec "$@"
