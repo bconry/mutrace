@@ -1,3 +1,7 @@
+## bconry/mutrace
+
+This repositry has been archived in favor of https://github.com/isc-projects/mutrace
+
 # mutrace
 
 A lock usage and contention profiler.
